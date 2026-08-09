@@ -1,0 +1,28 @@
+﻿repos:
+  - repo: local
+    hooks:
+      - id: ruff-format
+        name: Ruff format
+        entry: python -m ruff format --check
+        language: system
+        types: [python]
+
+      - id: ruff-check
+        name: Ruff lint
+        entry: python -m ruff check
+        language: system
+        types: [python]
+
+      - id: mypy
+        name: MyPy
+        entry: python -m mypy app
+        language: system
+        pass_filenames: false
+        types: [python]
+
+      - id: bandit
+        name: Bandit security scan
+        entry: python -m bandit -r app
+        language: system
+        pass_filenames: false
+        types: [python]

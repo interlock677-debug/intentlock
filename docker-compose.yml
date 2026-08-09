@@ -1,0 +1,45 @@
+services:
+  app:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    ports:
+      - "${API_PORT:-8000}:8000"
+    env_file:
+      - .env
+    environment:
+      DATABASE_URL: postgresql+psycopg2://intentlock:intentlock_secret@db:5432/intentlock
+      APP_ENV: production
+      DEBUG: "false"
+    volumes:
+      - ./logs:/app/logs
+    depends_on:
+      db:
+        condition: service_healthy
+    restart: unless-stopped
+    networks:
+      - intentlock-net
+
+  db:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_DB: intentlock
+      POSTGRES_USER: intentlock
+      POSTGRES_PASSWORD: intentlock_secret
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U intentlock -d intentlock"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    restart: unless-stopped
+    networks:
+      - intentlock-net
+
+volumes:
+  postgres_data:
+
+networks:
+  intentlock-net:
+    driver: bridge
