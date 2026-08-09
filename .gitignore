@@ -1,6 +1,8 @@
 ﻿# Python
 __pycache__/
 *.py[cod]
+*.pyo
+*.pyd
 *$py.class
 *.so
 
@@ -8,24 +10,27 @@ __pycache__/
 .venv/
 venv/
 env/
+ENV/
 
 # Testing / coverage
 .pytest_cache/
 .coverage
 .coverage.*
-htmlcov/
 coverage.xml
+htmlcov/
 
-# Type checking
+# Code linter caches
 .mypy_cache/
-
-# Ruff
 .ruff_cache/
 
 # Environment / secrets
 .env
 .env.*
 !.env.example
+
+# Application runtime logs
+logs/
+*.log
 
 # IDE
 .vscode/
@@ -35,14 +40,14 @@ coverage.xml
 .DS_Store
 Thumbs.db
 
-# Build artifacts
+# Packaging / build artifacts
 build/
 dist/
 *.egg-info/
 
-# Logs
-*.log
-
 # Temporary files
 *.tmp
 *.temp
+
+# Local Python version managers
+.python-version
