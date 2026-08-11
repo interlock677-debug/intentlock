@@ -1,5 +1,6 @@
 import json
-from typing import Any, Callable
+from collections.abc import Callable
+from typing import Any
 from urllib.error import HTTPError, URLError
 from urllib.request import Request, urlopen
 
@@ -14,10 +15,10 @@ class IntentLockLangChainTool:
 
     @staticmethod
     def _resolve_tool_name(tool: Callable[..., Any]) -> str:
-        if hasattr(tool, "name") and isinstance(getattr(tool, "name"), str):
-            return getattr(tool, "name")
-        if hasattr(tool, "__name__") and isinstance(getattr(tool, "__name__"), str):
-            return getattr(tool, "__name__")
+        if hasattr(tool, "name") and isinstance(tool.name, str):
+            return tool.name
+        if hasattr(tool, "__name__") and isinstance(tool.__name__, str):
+            return tool.__name__
         return tool.__class__.__name__
 
     def __call__(self, *args: Any, **kwargs: Any) -> Any:

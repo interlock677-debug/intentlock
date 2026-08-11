@@ -1,12 +1,13 @@
+import ast
+
+
 import re
-from datetime import datetime, timedelta, timezone
 from typing import Any
 
-import jwt
+import sqlglot
 
 from app.domain.models.intent import AgentActionDAG, IntentProofResponse
-from app.infrastructure.config.settings import get_settings
-
+from app.domain.services.policy_engine import PolicyEngine
 
 DESCTRUCTIVE_SQL_PATTERNS = [
     r"\bDROP\s+TABLE\b",
@@ -26,6 +27,9 @@ MAX_AMOUNT_PROMPT_PATTERNS = [
 class IntentEvaluatorService:
     """Evaluates agent intents for proof-of-intent authorization."""
 
+    def __init__(self, policy_engine: PolicyEngine | None = None) -> None:
+        self._policy_engine = policy_engine or PolicyEngine.from_file()
+
     def evaluate(self, intent: AgentActionDAG) -> IntentProofResponse:
         destructive_reason = self._inspect_destructive_sql(intent)
         if destructive_reason:
@@ -43,23 +47,30 @@ class IntentEvaluatorService:
                 reason=transfer_reason,
             )
 
+        # Policy engine risk evaluation
+        policy_text = f"{intent.user_prompt} {intent.reasoning_step}"
+        policy_result = self._policy_engine.evaluate(policy_text)
+        if policy_result.get("blocked"):
+            reasons = "; ".join(str(r) for r in policy_result.get("reasons", []))
+            return IntentProofResponse(
+                is_valid=False,
+                confidence_score=float(policy_result.get("risk_score", 0.0)),
+                reason=f"Policy violation: {reasons}",
+            )
+
+        # Polyglot/shell payload detection
+        if self._contains_polyglot_payload(intent):
+            return IntentProofResponse(
+                is_valid=False,
+                confidence_score=0.5,
+                reason="Polyglot or shell payload detected in proposed tool action.",
+            )
+
         return IntentProofResponse(
             is_valid=True,
             confidence_score=0.95,
             reason="Intent appears safe for execution.",
         )
-
-    def create_execution_token(self, intent: AgentActionDAG) -> str:
-        settings = get_settings()
-        now = datetime.now(tz=timezone.utc)
-        payload = {
-            "sub": intent.agent_id,
-            "type": "execution",
-            "tool": intent.proposed_tool,
-            "iat": int(now.timestamp()),
-            "exp": int((now + timedelta(seconds=1)).timestamp()),
-        }
-        return jwt.encode(payload, settings.jwt_secret_key, algorithm=settings.jwt_algorithm)
 
     def _inspect_destructive_sql(self, intent: AgentActionDAG) -> str | None:
         arguments = self._collect_strings(intent.tool_arguments)
@@ -68,6 +79,16 @@ class IntentEvaluatorService:
         for pattern in DESCTRUCTIVE_SQL_PATTERNS:
             if re.search(pattern, sql_text, flags=re.IGNORECASE):
                 return "Destructive SQL detected in proposed tool action."
+
+        # Use sqlglot to detect SQL injection attempts
+        try:
+            parsed = sqlglot.parse_one(sql_text)
+            if parsed is not None:
+                sql_type = str(parsed.key).upper()
+                if sql_type in {"DROP", "TRUNCATE", "DELETE", "UPDATE"}:
+                    return "Destructive SQL detected by parser."
+        except Exception:  # noqa: S110 - parser failure is not a positive detection
+            pass
 
         return None
 
@@ -139,3 +160,22 @@ class IntentEvaluatorService:
                 result.extend(self._collect_strings(item))
             return result
         return []
+
+    def _contains_polyglot_payload(self, intent: AgentActionDAG) -> bool:
+        text = f"{intent.user_prompt} {intent.reasoning_step}"
+        if re.search(
+            r"union\s+select|drop\s+table|truncate\s+table|echo\s+",
+            text,
+            flags=re.IGNORECASE,
+        ):
+            return True
+        try:
+            sqlglot.parse_one(text)
+            return True
+        except Exception:
+            pass
+        try:
+            ast.parse(text)
+            return True
+        except Exception:
+            return False

@@ -1,4 +1,3 @@
-import json
 from typing import Any
 
 from sdk.langchain_adapter import IntentLockLangChainTool

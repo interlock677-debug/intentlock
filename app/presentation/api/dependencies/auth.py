@@ -41,10 +41,9 @@ def _get_session() -> Generator[Session, None, None]:
         session.close()
 
 
-DbSession = Annotated[Session, Depends(_get_session)]
-
-
-def get_user_repository(session: DbSession) -> UserRepository:
+def get_user_repository(
+    session: Annotated[Session, Depends(_get_session)],
+) -> UserRepository:
     return SQLAlchemyUserRepository(session)
 
 
@@ -57,6 +56,7 @@ def get_token_service(settings: Annotated[Settings, Depends(get_app_settings)]) 
         secret_key=settings.jwt_secret_key,
         algorithm=settings.jwt_algorithm,
         expire_minutes=settings.jwt_access_token_expire_minutes,
+        clock_skew_seconds=settings.jwt_clock_skew_seconds,
     )
 
 

@@ -1,6 +1,7 @@
 import json
 import logging
-from datetime import datetime, timezone
+import sys
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
@@ -9,12 +10,11 @@ LOG_PATH.parent.mkdir(parents=True, exist_ok=True)
 
 logger = logging.getLogger("intentlock.audit")
 logger.setLevel(logging.INFO)
-handler = logging.StreamHandler()
-formatter = logging.Formatter(
-    "{\"timestamp\": \"%(asctime)s\", \"agent_id\": \"%(agent_id)s\", \"proposed_tool\": \"%(proposed_tool)s\", \"tool_arguments\": %(tool_arguments)s, \"verification_status\": \"%(verification_status)s\", \"rejection_reason\": \"%(rejection_reason)s\"}"
-)
-handler.setFormatter(formatter)
-logger.addHandler(handler)
+
+if not logger.handlers:
+    handler = logging.StreamHandler(sys.stdout)
+    handler.setFormatter(logging.Formatter("%(message)s"))
+    logger.addHandler(handler)
 
 
 def log_verification(
@@ -23,25 +23,46 @@ def log_verification(
     tool_arguments: dict[str, Any],
     verification_status: str,
     rejection_reason: str = "",
+    *,
+    correlation_id: str | None = None,
 ) -> None:
+    """Write a structured audit record for intent verification.
+
+    Never logs secrets, tokens, or sensitive request data.
+    """
     record = {
-        "timestamp": datetime.now(tz=timezone.utc).isoformat(),
+        "timestamp": datetime.now(tz=UTC).isoformat(),
+        "event_type": "intent_verification",
+        "correlation_id": correlation_id or "",
         "agent_id": agent_id,
         "proposed_tool": proposed_tool,
-        "tool_arguments": tool_arguments,
         "verification_status": verification_status,
         "rejection_reason": rejection_reason,
     }
     with LOG_PATH.open("a", encoding="utf-8") as handle:
         handle.write(json.dumps(record) + "\n")
 
-    logger.info(
-        "audit",
-        extra={
-            "agent_id": agent_id,
-            "proposed_tool": proposed_tool,
-            "tool_arguments": json.dumps(tool_arguments),
-            "verification_status": verification_status,
-            "rejection_reason": rejection_reason,
-        },
-    )
+    logger.info(json.dumps(record))
+
+
+def log_security_event(
+    event_type: str,
+    *,
+    correlation_id: str | None = None,
+    **details: Any,
+) -> None:
+    """Write a structured security event record.
+
+    Never logs secrets, tokens, or sensitive request data.
+    """
+    record: dict[str, Any] = {
+        "timestamp": datetime.now(tz=UTC).isoformat(),
+        "event_type": event_type,
+        "correlation_id": correlation_id or "",
+    }
+    record.update(details)
+
+    with LOG_PATH.open("a", encoding="utf-8") as handle:
+        handle.write(json.dumps(record) + "\n")
+
+    logger.info(json.dumps(record))

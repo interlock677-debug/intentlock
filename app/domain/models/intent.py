@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from typing import Any, Optional
+from typing import Any
 
 from pydantic import BaseModel
 
@@ -17,4 +17,4 @@ class IntentProofResponse(BaseModel):
     is_valid: bool
     confidence_score: float
     reason: str
-    ephemeral_token: Optional[str] = None
+    ephemeral_token: str | None = None

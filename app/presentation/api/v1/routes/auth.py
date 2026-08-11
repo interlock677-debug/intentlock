@@ -10,7 +10,11 @@ from app.domain.exceptions.domain_errors import (
     DuplicateEmailError,
     InactiveUserError,
 )
-from app.presentation.api.dependencies.auth import CurrentUser, get_authenticate_user_use_case, get_register_user_use_case
+from app.presentation.api.dependencies.auth import (
+    CurrentUser,
+    get_authenticate_user_use_case,
+    get_register_user_use_case,
+)
 
 router = APIRouter(prefix="/auth", tags=["Authentication"])
 
@@ -23,9 +27,14 @@ async def register(
     try:
         return await use_case.execute(request)
     except DuplicateEmailError as exc:
-        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)) from exc
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT, detail=str(exc)
+        ) from exc
     except ValueError as exc:
-        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(exc)) from exc
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail=str(exc),
+        ) from exc
 
 
 @router.post("/login", response_model=AuthResponse)
@@ -36,7 +45,9 @@ async def login(
     try:
         return await use_case.execute(request)
     except (AuthenticationError, InactiveUserError) as exc:
-        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail=str(exc)) from exc
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED, detail=str(exc)
+        ) from exc
 
 
 @router.get("/me", response_model=UserResponse)

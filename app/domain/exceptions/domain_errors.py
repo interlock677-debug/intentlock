@@ -16,3 +16,19 @@ class AuthenticationError(DomainError):
 
 class InactiveUserError(DomainError):
     """Raised when an inactive user attempts authentication."""
+
+
+class ExecutionTokenError(DomainError):
+    """Raised when an execution token is invalid, expired, or replayed."""
+
+
+class PolicyViolationError(DomainError):
+    """Raised when a policy evaluation blocks an action."""
+
+
+class ApprovalError(DomainError):
+    """Raised when an HITL approval operation fails."""
+
+
+class WebhookError(DomainError):
+    """Raised when a webhook callback fails validation."""

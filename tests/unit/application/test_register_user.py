@@ -1,4 +1,5 @@
 import pytest
+from sqlalchemy.orm import Session
 
 from app.application.dto.auth import RegisterRequest
 from app.application.use_cases.register_user import RegisterUserUseCase
@@ -8,7 +9,6 @@ from app.infrastructure.persistence.repositories.sqlalchemy_user_repository impo
 )
 from app.infrastructure.security.bcrypt_password_hasher import BcryptPasswordHasher
 from app.infrastructure.security.jwt_token_service import JWTTokenService
-from sqlalchemy.orm import Session
 
 
 @pytest.fixture

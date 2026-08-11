@@ -50,5 +50,5 @@ class AuthResponse(BaseModel):
     """Authentication result with bearer token."""
 
     access_token: str
-    token_type: str = "bearer"
+    token_type: str = "bearer"  # noqa: S105
     user: UserResponse

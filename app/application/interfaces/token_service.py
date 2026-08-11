@@ -9,6 +9,7 @@ class TokenPayload:
 
     sub: UUID
     email: str
+    jti: str
 
 
 class TokenService(ABC):

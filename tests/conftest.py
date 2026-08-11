@@ -15,15 +15,23 @@ os.environ.setdefault("APP_ENV", "test")
 os.environ.setdefault("DEBUG", "true")
 
 from app.infrastructure.config.settings import get_settings  # noqa: E402
-from app.infrastructure.persistence.database import Base, SessionLocal, engine, init_db  # noqa: E402
+from app.infrastructure.persistence.database import (  # noqa: E402
+    Base,
+    SessionLocal,
+    engine,
+    init_db,
+)
 from app.main import create_app  # noqa: E402
+from app.presentation.api.dependencies.security import reset_security_dependencies  # noqa: E402
 
 
 @pytest.fixture(autouse=True)
 def _reset_settings_cache() -> Generator[None, None, None]:
     get_settings.cache_clear()
+    reset_security_dependencies()
     yield
     get_settings.cache_clear()
+    reset_security_dependencies()
 
 
 @pytest.fixture(autouse=True)

@@ -24,7 +24,12 @@ class Base(DeclarativeBase):
 def init_db() -> None:
     """Create database tables."""
     # Import models so metadata is populated before create_all.
-    from app.infrastructure.persistence.models import user_model  # noqa: F401
+    from app.infrastructure.persistence.models import (  # noqa: F401
+        ApprovalRequestModel,
+        AuditEventModel,
+        ExecutionTokenModel,
+        UserModel,
+    )
 
     Base.metadata.create_all(bind=engine)
 

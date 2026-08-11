@@ -1,0 +1,17 @@
+# IntentLock v4.0 Policy Configuration
+#
+# This file configures the deterministic policy engine.
+# All thresholds are explicitly configurable — no hardcoded financial limits.
+
+# Risk score threshold for blocking an action (0.0 - 1.0)
+score_threshold: 0.5
+
+# Substring patterns that trigger an automatic block when found in intent text
+blocked_patterns:
+  - "drop table"
+  - "truncate table"
+  - "rm -rf"
+  - "/bin/sh"
+  - "powershell -enc"
+  - "delete from users"
+  - "update users set"

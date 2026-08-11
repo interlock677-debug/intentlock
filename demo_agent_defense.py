@@ -3,7 +3,6 @@ from pathlib import Path
 
 from sdk.intentlock import IntentLockGuard, SecurityError, guard_tool
 
-
 LOG_PATH = Path("logs") / "audit_trail.jsonl"
 intent_lock = IntentLockGuard()
 

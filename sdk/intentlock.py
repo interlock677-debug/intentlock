@@ -1,8 +1,9 @@
 import functools
 import inspect
 import json
+from collections.abc import Callable
 from dataclasses import dataclass
-from typing import Any, Callable, Optional
+from typing import Any
 from urllib.error import HTTPError, URLError
 from urllib.request import Request, urlopen
 
@@ -14,8 +15,15 @@ class SecurityError(Exception):
 @dataclass
 class IntentLockGuard:
     base_url: str = "http://127.0.0.1:8000/api/v1/intent/verify"
+    execute_url: str = "http://127.0.0.1:8000/api/v1/intent/execute"
 
-    def verify_intent(self, tool_name: str, tool_arguments: dict[str, Any], user_prompt: str, agent_id: str = "agent-000") -> str:
+    def verify_intent(
+        self,
+        tool_name: str,
+        tool_arguments: dict[str, Any],
+        user_prompt: str,
+        agent_id: str = "agent-000",
+    ) -> str:
         payload = {
             "user_prompt": user_prompt,
             "agent_id": agent_id,
@@ -55,6 +63,35 @@ class IntentLockGuard:
             raise SecurityError("IntentLock did not return an ephemeral execution token.")
         return token
 
+    def consume_execution_token(self, token: str) -> dict[str, Any]:
+        """Consume an ephemeral execution token to prevent replay."""
+        body = json.dumps({"execution_token": token}).encode("utf-8")
+        request = Request(
+            self.execute_url,
+            data=body,
+            headers={"Content-Type": "application/json"},
+            method="POST",
+        )
+
+        try:
+            with urlopen(request, timeout=5) as response:
+                status_code = response.getcode()
+                response_text = response.read().decode("utf-8")
+        except HTTPError as exc:
+            response_text = exc.read().decode("utf-8") if hasattr(exc, "read") else str(exc)
+            raise SecurityError(
+                f"IntentLock execution failed: {exc.code} {response_text}"
+            ) from exc
+        except URLError as exc:
+            raise SecurityError(f"IntentLock execution request failed: {exc}") from exc
+
+        if status_code != 200:
+            raise SecurityError(
+                f"IntentLock execution failed: {status_code} {response_text}"
+            )
+
+        return json.loads(response_text)
+
 
 def guard_tool(intent_lock_client: IntentLockGuard) -> Callable[[Callable[..., Any]], Callable[..., Any]]:
     def decorator(tool_func: Callable[..., Any]) -> Callable[..., Any]:
@@ -80,7 +117,9 @@ def guard_tool(intent_lock_client: IntentLockGuard) -> Callable[[Callable[..., A
                 agent_id=agent_id,
             )
 
-            print(f"[IntentLock] granted ephemeral token: {ephemeral_token}")
+            # Consume the token to enforce single-use semantics.
+            intent_lock_client.consume_execution_token(ephemeral_token)
+
             return tool_func(*args, **kwargs)
 
         return wrapper

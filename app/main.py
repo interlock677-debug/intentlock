@@ -6,6 +6,9 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from app.infrastructure.config.settings import get_settings
 from app.infrastructure.persistence.database import init_db
+from app.presentation.api.middleware.correlation import CorrelationIdMiddleware
+from app.presentation.api.middleware.exception_handler import register_exception_handlers
+from app.presentation.api.middleware.rate_limit import RateLimitMiddleware
 from app.presentation.api.middleware.security_headers import SecurityHeadersMiddleware
 from app.presentation.api.v1.router import api_v1_router
 
@@ -21,7 +24,7 @@ def create_app() -> FastAPI:
 
     application = FastAPI(
         title=settings.app_name,
-        version="0.1.0",
+        version="4.0.0",
         description="Enterprise-grade dynamic proof-of-intent authorization gateway for AI agents.",
         docs_url="/docs" if settings.debug else None,
         redoc_url="/redoc" if settings.debug else None,
@@ -34,9 +37,13 @@ def create_app() -> FastAPI:
         allow_origins=settings.cors_origins,
         allow_credentials=True,
         allow_methods=["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
-        allow_headers=["Authorization", "Content-Type"],
+        allow_headers=["Authorization", "Content-Type", "X-Correlation-ID"],
     )
     application.add_middleware(SecurityHeadersMiddleware)
+    application.add_middleware(RateLimitMiddleware)
+    application.add_middleware(CorrelationIdMiddleware)
+
+    register_exception_handlers(application)
     application.include_router(api_v1_router, prefix="/api/v1")
 
     return application
