@@ -23,15 +23,18 @@ from app.infrastructure.persistence.database import (  # noqa: E402
 )
 from app.main import create_app  # noqa: E402
 from app.presentation.api.dependencies.security import reset_security_dependencies  # noqa: E402
+from app.presentation.api.middleware.rate_limit import reset_rate_limits  # noqa: E402
 
 
 @pytest.fixture(autouse=True)
 def _reset_settings_cache() -> Generator[None, None, None]:
     get_settings.cache_clear()
     reset_security_dependencies()
+    reset_rate_limits()
     yield
     get_settings.cache_clear()
     reset_security_dependencies()
+    reset_rate_limits()
 
 
 @pytest.fixture(autouse=True)

@@ -1,6 +1,4 @@
 import ast
-
-
 import re
 from typing import Any
 
@@ -87,8 +85,8 @@ class IntentEvaluatorService:
                 sql_type = str(parsed.key).upper()
                 if sql_type in {"DROP", "TRUNCATE", "DELETE", "UPDATE"}:
                     return "Destructive SQL detected by parser."
-        except Exception:  # noqa: S110 - parser failure is not a positive detection
-            pass
+        except Exception:
+            return None
 
         return None
 
@@ -106,7 +104,8 @@ class IntentEvaluatorService:
 
         if transfer_amount > prompt_limit:
             return (
-                f"Requested transfer amount ${transfer_amount:.2f} exceeds the prompt limit of ${prompt_limit:.2f}."
+                f"Requested transfer amount ${transfer_amount:.2f} exceeds the prompt limit "
+                f"of ${prompt_limit:.2f}."
             )
 
         return None
@@ -129,7 +128,7 @@ class IntentEvaluatorService:
         for key, value in arguments.items():
             if key.lower() in ("amount", "value", "total", "transfer_amount", "payment_amount"):
                 return self._parse_amount(value)
-            if isinstance(value, str) and re.search(r"\$\d", value):
+            if isinstance(value, str):
                 found = re.search(r"\$([0-9][0-9,]*(?:\.[0-9]+)?)", value)
                 if found:
                     return self._parse_amount(found.group(1))
@@ -173,9 +172,9 @@ class IntentEvaluatorService:
             sqlglot.parse_one(text)
             return True
         except Exception:
-            pass
-        try:
-            ast.parse(text)
-            return True
-        except Exception:
-            return False
+            try:
+                ast.parse(text)
+                return True
+            except Exception:
+                return False
+        return True

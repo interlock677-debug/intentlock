@@ -5,6 +5,8 @@ from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 
 from app.application.interfaces.key_manager import KeyManager
 
+_KEY_ID = "ed25519-default"
+
 
 class EnvKeyManager(KeyManager):
     """Development/test key manager backed by environment variables.
@@ -23,12 +25,25 @@ class EnvKeyManager(KeyManager):
         self._execution_key_path = execution_key_path
         self._private_key: Ed25519PrivateKey | None = None
 
-    def get_signing_key(self) -> Ed25519PrivateKey:
+    @property
+    def active_key_id(self) -> str:
+        return _KEY_ID
+
+    def get_key_ids(self) -> list[str]:
+        return [_KEY_ID]
+
+    def get_signing_key(self, key_id: str | None = None) -> Ed25519PrivateKey:
+        if key_id is not None and key_id != _KEY_ID:
+            msg = f"Unknown key ID: {key_id}"
+            raise KeyError(msg)
         if self._private_key is None:
             self._private_key = self._load_or_create_private_key()
         return self._private_key
 
-    def get_verification_key(self) -> object:
+    def get_verification_key(self, key_id: str | None = None) -> object:
+        if key_id is not None and key_id != _KEY_ID:
+            msg = f"Unknown key ID: {key_id}"
+            raise KeyError(msg)
         return self.get_signing_key().public_key()
 
     def get_secret(self, name: str) -> str:

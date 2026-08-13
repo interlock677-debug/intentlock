@@ -1,26 +1,30 @@
 from __future__ import annotations
 
 import contextlib
-from collections import OrderedDict
 from datetime import UTC, datetime, timedelta
 from typing import Any
 from uuid import uuid4
 
+from sqlalchemy import delete, select
+from sqlalchemy.exc import IntegrityError
+
 from app.domain.exceptions.domain_errors import ApprovalError
+from app.infrastructure.persistence.database import get_db_session
+from app.infrastructure.persistence.models.approval_request_model import ApprovalRequestModel
 
 
 class HITLQueue:
     """Human-in-the-loop approval queue.
 
     Supports non-blocking approval workflows with expiration, timeout
-    handling, and audit trail. Entries expire after a configurable TTL.
+    handling, and audit trail. Requests are durably persisted in the
+    database so they survive application restarts and are shared across
+    application instances. Entries expire after a configurable TTL.
     """
 
     def __init__(self, *, ttl_seconds: int = 300, redis_client: Any | None = None) -> None:
         self._ttl_seconds = ttl_seconds
         self._redis_client = redis_client
-        self._pending: OrderedDict[str, dict[str, object]] = OrderedDict()
-        self._history: dict[str, dict[str, object]] = {}
 
     async def enqueue_request(
         self,
@@ -31,24 +35,29 @@ class HITLQueue:
     ) -> str:
         request_key = request_id or str(uuid4())
         now = datetime.now(tz=UTC)
-        entry: dict[str, object] = {
-            "request_id": request_key,
-            "intent_text": intent_text,
-            "risk_score": risk_score,
-            "status": "pending",
-            "created_at": now.isoformat(),
-            "expires_at": (now + timedelta(seconds=self._ttl_seconds)).isoformat(),
-        }
+        try:
+            with get_db_session() as session:
+                session.add(
+                    ApprovalRequestModel(
+                        request_id=request_key,
+                        intent_text=intent_text,
+                        risk_score=risk_score,
+                        status="pending",
+                        created_at=now,
+                        expires_at=now + timedelta(seconds=self._ttl_seconds),
+                    )
+                )
+        except IntegrityError as exc:
+            raise ApprovalError(f"Approval request {request_key} already exists") from exc
 
+        # Best-effort cache write for fast lookups; the database is the source of truth.
         if self._redis_client is not None:
             with contextlib.suppress(Exception):
                 self._redis_client.set(
                     f"hitl:{request_key}",
-                    str(entry),
+                    str({"request_id": request_key, "status": "pending"}),
                     ex=self._ttl_seconds,
                 )
-
-        self._pending[request_key] = entry
         return request_key
 
     async def approve_request(self, request_id: str) -> dict[str, object]:
@@ -58,43 +67,71 @@ class HITLQueue:
         return await self._decide(request_id, "rejected")
 
     async def list_pending_requests(self) -> list[dict[str, object]]:
-        self._evict_expired()
-        return [dict(entry) for entry in self._pending.values()]
+        now = datetime.now(tz=UTC)
+        with get_db_session() as session:
+            pending = session.scalars(
+                select(ApprovalRequestModel)
+                .where(ApprovalRequestModel.status == "pending")
+                .order_by(ApprovalRequestModel.created_at)
+            ).all()
+            result: list[dict[str, object]] = []
+            for model in pending:
+                if self._as_utc(model.expires_at) <= now:
+                    model.status = "expired"
+                    model.decided_at = now
+                else:
+                    result.append(self._to_dict(model))
+            return result
 
     def reset(self) -> None:
-        self._pending.clear()
-        self._history.clear()
+        with get_db_session() as session:
+            session.execute(delete(ApprovalRequestModel))
 
     async def _decide(self, request_id: str, decision: str) -> dict[str, object]:
-        self._evict_expired()
-
-        entry = self._pending.get(request_id)
-        if entry is None:
-            raise ApprovalError(f"Approval request {request_id} not found")
-
-        # Verify the entry has not expired.
-        expires_at = datetime.fromisoformat(str(entry["expires_at"]))
-        if expires_at <= datetime.now(tz=UTC):
-            self._pending.pop(request_id, None)
-            entry["status"] = "expired"
-            self._history[request_id] = entry
-            raise ApprovalError(f"Approval request {request_id} has expired")
-
-        self._pending.pop(request_id, None)
-        entry["status"] = decision
-        entry["decided_at"] = datetime.now(tz=UTC).isoformat()
-        self._history[request_id] = entry
-        return entry
-
-    def _evict_expired(self) -> None:
         now = datetime.now(tz=UTC)
-        expired = [
-            key
-            for key, entry in self._pending.items()
-            if "expires_at" in entry
-            and datetime.fromisoformat(str(entry["expires_at"])) <= now
-        ]
-        for key in expired:
-            entry = self._pending.pop(key)
-            entry["status"] = "expired"
-            self._history[key] = entry
+        with get_db_session() as session:
+            model = session.scalar(
+                select(ApprovalRequestModel).where(ApprovalRequestModel.request_id == request_id)
+            )
+            if model is None:
+                raise ApprovalError(f"Approval request {request_id} not found")
+
+            if self._as_utc(model.expires_at) <= now:
+                model.status = "expired"
+                model.decided_at = now
+                result = self._to_dict(model)
+                expired = True
+            elif model.status != "pending":
+                raise ApprovalError(f"Approval request {request_id} has already been resolved")
+            else:
+                model.status = decision
+                model.decided_at = now
+                result = self._to_dict(model)
+                expired = False
+
+        if expired:
+            raise ApprovalError(f"Approval request {request_id} has expired")
+        return result
+
+    @staticmethod
+    def _as_utc(dt: datetime) -> datetime:
+        """Normalize a possibly-naive datetime to an aware UTC datetime.
+
+        SQLite stores ``DateTime(timezone=True)`` columns as naive datetimes,
+        so values read back from the database must be re-attached to UTC before
+        comparison with aware ``datetime.now(tz=UTC)`` values.
+        """
+        if dt.tzinfo is None:
+            return dt.replace(tzinfo=UTC)
+        return dt.astimezone(UTC)
+
+    def _to_dict(self, model: ApprovalRequestModel) -> dict[str, object]:
+        return {
+            "request_id": model.request_id,
+            "intent_text": model.intent_text,
+            "risk_score": model.risk_score,
+            "status": model.status,
+            "created_at": self._as_utc(model.created_at).isoformat(),
+            "expires_at": self._as_utc(model.expires_at).isoformat(),
+            "decided_at": self._as_utc(model.decided_at).isoformat() if model.decided_at else None,
+        }

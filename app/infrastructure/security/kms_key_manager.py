@@ -27,7 +27,14 @@ class KMSKeyManager(KeyManager):
         self._key_id = key_id
         self._jwt_secret_name = jwt_secret_name
 
-    def get_signing_key(self) -> Any:
+    @property
+    def active_key_id(self) -> str:
+        return self._key_id
+
+    def get_key_ids(self) -> list[str]:
+        return [self._key_id]
+
+    def get_signing_key(self, key_id: str | None = None) -> Any:
         """Return a reference to the KMS signing key.
 
         The concrete return type depends on the provider SDK. For AWS KMS
@@ -35,13 +42,19 @@ class KMSKeyManager(KeyManager):
         path. The application must use the provider SDK to perform signing
         operations rather than retrieving raw key material.
         """
+        if key_id is not None and key_id != self._key_id:
+            msg = f"Unknown key ID: {key_id}"
+            raise KeyError(msg)
         return {
             "provider": self._provider,
             "key_id": self._key_id,
         }
 
-    def get_verification_key(self) -> Any:
+    def get_verification_key(self, key_id: str | None = None) -> Any:
         """Return a reference to the KMS public verification key."""
+        if key_id is not None and key_id != self._key_id:
+            msg = f"Unknown key ID: {key_id}"
+            raise KeyError(msg)
         return {
             "provider": self._provider,
             "key_id": self._key_id,
@@ -62,3 +75,21 @@ class KMSKeyManager(KeyManager):
             raise NotImplementedError(msg)
         msg = f"Unknown secret requested: {name}"
         raise KeyError(msg)
+
+    def sign(self, data: bytes, key_id: str | None = None) -> bytes:
+        """Sign data through the external KMS.
+
+        This method must be overridden by concrete KMS provider integrations
+        that use the provider SDK (e.g., boto3 for AWS KMS). The default
+        implementation raises NotImplementedError to ensure fail-closed
+        behavior — signing through a KMS placeholder is never silent.
+        """
+        if key_id is not None and key_id != self._key_id:
+            msg = f"Unknown key ID: {key_id}"
+            raise KeyError(msg)
+        msg = (
+            f"KMS signing through provider '{self._provider}' "
+            f"(key {self._key_id}) requires provider SDK integration. "
+            "Implement sign() using the provider's signing API."
+        )
+        raise NotImplementedError(msg)

@@ -1,9 +1,8 @@
+import secrets
 from functools import lru_cache
 
 from pydantic import Field, field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
-
-DEFAULT_DEV_JWT_SECRET = "development-intentlock-secret-key-2026-abcdef"  # noqa: S105
 
 
 class Settings(BaseSettings):
@@ -19,12 +18,12 @@ class Settings(BaseSettings):
     app_name: str = "IntentLock"
     app_env: str = Field(default="development", pattern=r"^(development|staging|production|test)$")
     debug: bool = False
-    api_host: str = "0.0.0.0"  # noqa: S104
+    api_host: str = "127.0.0.1"
     api_port: int = 8000
 
     database_url: str = "sqlite:///./intentlock.db"
 
-    jwt_secret_key: str = Field(default=DEFAULT_DEV_JWT_SECRET, min_length=32)
+    jwt_secret_key: str = Field(default_factory=lambda: secrets.token_urlsafe(48), min_length=32)
     jwt_algorithm: str = "HS256"
     jwt_access_token_expire_minutes: int = Field(default=30, ge=5, le=1440)
     jwt_clock_skew_seconds: int = Field(default=30, ge=0, le=300)
@@ -73,14 +72,18 @@ class Settings(BaseSettings):
 
     @model_validator(mode="after")
     def enforce_production_secret(self) -> "Settings":
-        if self.app_env != "development" and self.jwt_secret_key == DEFAULT_DEV_JWT_SECRET:
+        if self.app_env != "development" and "jwt_secret_key" not in self.model_fields_set:
             raise ValueError(
                 "JWT_SECRET_KEY must be configured explicitly for non-development environments."
             )
         if self.app_env == "production" and not self.redis_url:
+            raise ValueError("REDIS_URL must be configured for production environments.")
+        if self.app_env == "production" and not self.redis_enabled:
             raise ValueError(
-                "REDIS_URL must be configured for production environments."
+                "Redis replay protection cannot be disabled in production environments."
             )
+        if self.app_env == "production" and self.database_url.startswith("sqlite"):
+            raise ValueError("Production environments must use a PostgreSQL DATABASE_URL.")
         return self
 
 

@@ -21,7 +21,9 @@ class FakeResponse:
 
 
 def test_intent_lock_langchain_tool_allows_valid_call(client, monkeypatch):
-    def add_numbers(a: int, b: int, user_prompt: str = "Add two numbers", agent_id: str = "agent-000") -> int:
+    def add_numbers(
+        a: int, b: int, user_prompt: str = "Add two numbers", agent_id: str = "agent-000"
+    ) -> int:
         return a + b
 
     tool = IntentLockLangChainTool(
@@ -30,7 +32,7 @@ def test_intent_lock_langchain_tool_allows_valid_call(client, monkeypatch):
     )
 
     def fake_urlopen(request: Any, timeout: int = 5) -> FakeResponse:
-        headers = {k: v for k, v in request.header_items()}
+        headers = dict(request.header_items())
         response = client.post(request.get_full_url(), data=request.data, headers=headers)
         return FakeResponse(response)
 
@@ -42,7 +44,9 @@ def test_intent_lock_langchain_tool_allows_valid_call(client, monkeypatch):
 
 
 def test_intent_lock_langchain_tool_blocks_malicious_action(client, monkeypatch):
-    def execute_sql(query: str, user_prompt: str = "Run SQL query", agent_id: str = "agent-000") -> str:
+    def execute_sql(
+        query: str, user_prompt: str = "Run SQL query", agent_id: str = "agent-000"
+    ) -> str:
         return "SQL executed"
 
     tool = IntentLockLangChainTool(
@@ -51,7 +55,7 @@ def test_intent_lock_langchain_tool_blocks_malicious_action(client, monkeypatch)
     )
 
     def fake_urlopen(request: Any, timeout: int = 5) -> FakeResponse:
-        headers = {k: v for k, v in request.header_items()}
+        headers = dict(request.header_items())
         response = client.post(request.get_full_url(), data=request.data, headers=headers)
         return FakeResponse(response)
 

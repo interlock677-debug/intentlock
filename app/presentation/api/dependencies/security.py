@@ -57,7 +57,7 @@ def get_nonce_store() -> NonceStore:
     """
     redis_client = get_redis_client()
     l1 = MemoryNonceStore()
-    if redis_client.available:
+    if get_settings().app_env == "production" or redis_client.available:
         l2: NonceStore | None = RedisNonceStore(redis_client)
     else:
         l2 = None

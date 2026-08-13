@@ -4,11 +4,17 @@ from typing import Any
 from urllib.error import HTTPError, URLError
 from urllib.request import Request, urlopen
 
+from sdk.intentlock import _validate_gateway_url
+
 
 class IntentLockLangChainTool:
     """Wraps a LangChain tool or callable with IntentLock verification."""
 
-    def __init__(self, tool: Callable[..., Any], base_url: str = "http://127.0.0.1:8000/api/v1/intent/verify") -> None:
+    def __init__(
+        self,
+        tool: Callable[..., Any],
+        base_url: str = "http://127.0.0.1:8000/api/v1/intent/verify",
+    ) -> None:
         self._tool = tool
         self.base_url = base_url
         self.tool_name = self._resolve_tool_name(tool)
@@ -29,11 +35,7 @@ class IntentLockLangChainTool:
         if args:
             tool_arguments["args"] = [*args]
         tool_arguments.update(
-            {
-                key: value
-                for key, value in kwargs.items()
-                if key not in {"user_prompt", "agent_id"}
-            }
+            {key: value for key, value in kwargs.items() if key not in {"user_prompt", "agent_id"}}
         )
 
         payload = {
@@ -45,15 +47,15 @@ class IntentLockLangChainTool:
         }
 
         body = json.dumps(payload).encode("utf-8")
-        request = Request(
-            self.base_url,
+        request = Request(  # noqa: S310 - endpoint is validated as HTTP(S) below
+            _validate_gateway_url(self.base_url),
             data=body,
             headers={"Content-Type": "application/json"},
             method="POST",
         )
 
         try:
-            with urlopen(request, timeout=5) as response:
+            with urlopen(request, timeout=5) as response:  # noqa: S310 - validated HTTP(S) URL
                 status_code = response.getcode()
                 response_text = response.read().decode("utf-8")
         except HTTPError as exc:

@@ -21,7 +21,9 @@ def token_service() -> Ed25519ExecutionTokenService:
 
 
 def test_create_and_verify(token_service: Ed25519ExecutionTokenService) -> None:
-    token = token_service.create_execution_token(agent_id="agent-123", tool="transfer_funds", ttl_seconds=1)
+    token = token_service.create_execution_token(
+        agent_id="agent-123", tool="transfer_funds", ttl_seconds=1
+    )
     payload = token_service.verify_execution_token(token)
     assert payload["sub"] == "agent-123"
     assert payload["tool"] == "transfer_funds"
@@ -30,7 +32,9 @@ def test_create_and_verify(token_service: Ed25519ExecutionTokenService) -> None:
 
 
 def test_replay_rejected(token_service: Ed25519ExecutionTokenService) -> None:
-    token = token_service.create_execution_token(agent_id="agent-123", tool="transfer_funds", ttl_seconds=1)
+    token = token_service.create_execution_token(
+        agent_id="agent-123", tool="transfer_funds", ttl_seconds=1
+    )
     assert token_service.verify_execution_token(token) is not None
     with pytest.raises(ExecutionTokenError):
         token_service.verify_execution_token(token)
@@ -64,7 +68,9 @@ def test_malformed_token_rejected(token_service: Ed25519ExecutionTokenService) -
 
 
 def test_invalid_signature_rejected(token_service: Ed25519ExecutionTokenService) -> None:
-    token = token_service.create_execution_token(agent_id="agent-123", tool="transfer_funds", ttl_seconds=1)
+    token = token_service.create_execution_token(
+        agent_id="agent-123", tool="transfer_funds", ttl_seconds=1
+    )
     parts = token.split(".")
     parts[2] = "tampered"
     with pytest.raises(ExecutionTokenError):

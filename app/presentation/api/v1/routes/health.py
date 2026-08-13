@@ -30,7 +30,8 @@ async def readiness_check() -> dict[str, str]:
         redis_client = RedisClient(settings.redis_url)
         redis_status = "ok" if redis_client.available else "unhealthy"
 
-    ready = db_status == "ok"
+    redis_required = bool(settings.redis_url and settings.redis_enabled)
+    ready = db_status == "ok" and (not redis_required or redis_status == "ok")
     return {
         "status": "ready" if ready else "not_ready",
         "db": db_status,

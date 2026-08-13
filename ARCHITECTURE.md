@@ -1,108 +1,64 @@
-# IntentLock Architecture
+# IntentLock 4.0 Architecture
 
-## 1. System Overview
+## Components
 
-IntentLock is a lightweight proof-of-intent authorization gateway for AI agents. It provides a deterministic, low-latency verification layer that intercepts proposed agent actions before execution and enforces policy using a local runtime.
+IntentLock uses a layered Python design:
 
-The gateway is designed for enterprise environments where AI agents must be constrained by strict security controls, auditability, and minimal external dependency.
-
-Key characteristics:
-- Lightweight and fast, with minimal runtime overhead.
-- Zero-latency verification for local agent workflows.
-- Proof-of-intent semantics: the agent must demonstrate the requested action before execution.
-- Works as a local gateway to prevent unsafe or unauthorized behavior.
-
-## 2. Zero-Trust Data Flow Diagram
-
-User Prompt -> Agent Reasoning -> IntentLock Gateway -> 1-Second Ephemeral Token -> Enterprise Resource
-
-Detailed flow:
-
-1. User Prompt
-   - The user provides an instruction, goal, or query to the AI agent.
-2. Agent Reasoning
-   - The agent selects a tool and prepares a proposed action with tool name and arguments.
-3. IntentLock Gateway
-   - The SDK posts the proposed action to `/api/v1/intent/verify`.
-   - IntentLock evaluates the request against deterministic policies.
-4. 1-Second Ephemeral Token
-   - If allowed, the gateway returns a single-use JWT valid for 1 second.
-5. Enterprise Resource
-   - The agent uses the ephemeral token to execute the action against the protected resource.
-
-## 3. Security Guarantees
-
-- Single-use 1-second JWT execution tokens.
-  - Execution tokens expire immediately after issuance and are valid for only one second.
-
-- Deterministic policy enforcement.
-  - SQL injection and destructive query patterns are detected using deterministic rule checks.
-  - Financial action limits are enforced based on prompt instructions and tool arguments.
-
-- Local execution with zero external internet data egress.
-  - IntentLock is built for on-premise or air-gapped deployment.
-  - No external AI request or data exfiltration is required for verification.
-
-- Structured JSON audit logging.
-  - Verification decisions are recorded in `logs/audit_trail.jsonl`.
-  - JSONL format enables easy ingestion into SIEM tools such as Splunk, Datadog, or other security analytics platforms.
-
-## 4. Deployment Options
-
-### On-Premise Docker
-
-The application can run locally or on-premise using Docker Compose.
-
-```bash
-docker compose up --build
+```text
+FastAPI presentation -> application use cases/ports -> domain services -> infrastructure adapters
 ```
 
-This deployment option is ideal for enterprise environments requiring strong network controls and full infrastructure ownership.
+- `app/presentation`: FastAPI routes, middleware, dependency wiring.
+- `app/application`: authentication DTOs, use cases, and port interfaces.
+- `app/domain`: entities, value objects, policy, intent evaluation, HITL queue, and velocity tracker.
+- `app/infrastructure`: settings, SQLAlchemy, Alembic models, Redis, cryptography, and audit logging.
+- `sdk`: standard Python and LangChain callable wrappers.
 
-### Cloud Run / VPC Deployment
+## Request flow and trust boundaries
 
-For managed cloud deployment, run the gateway in a VPC-enabled environment and restrict access to trusted agents only.
-
-1. Build a container image.
-2. Deploy into a VPC or private subnet.
-3. Configure ingress rules so only approved agent hosts may call the verification endpoint.
-4. Ensure audit logs are forwarded to enterprise monitoring and SIEM.
-
-This approach preserves the zero-trust architecture while enabling managed cloud operations.
-
-## 5. Integration Guide
-
-### IntentLockGuard SDK
-
-Use `IntentLockGuard` to protect Python-based tool calls with IntentLock verification.
-
-```python
-from sdk.intentlock import IntentLockGuard
-
-intent_lock = IntentLockGuard()
-
-@intent_lock.guard_tool(intent_lock)
-def transfer_funds(amount: int, recipient: str, user_prompt: str, agent_id: str):
-    # execute payment
-    return f"Transferred ${amount} to {recipient}"
+```text
+Agent/tool -> SDK -> POST /intent/verify -> evaluator + policy -> Ed25519 execution token
+       -> POST /intent/execute -> nonce store -> SDK invokes wrapped local tool
 ```
 
-### IntentLockLangChainTool
+The SDK validates its configured gateway URL as HTTP(S). The API validates request DTOs and intent models. `/intent/verify` returns 403 for blocked actions; permitted actions receive an execution JWT containing `sub`, `tool`, `iat`, `nbf`, `exp`, `jti`, and `type=execution`. `/intent/execute` verifies the Ed25519 signature and claims, applies strict expiry, atomically consumes `jti`, and rejects replay.
 
-Use `IntentLockLangChainTool` to wrap LangChain tools with the same IntentLock verification flow.
+Access tokens are separate HS256 bearer JWTs issued by authentication use cases. They require `sub`, `email`, `exp`, `iat`, and `jti`, validate `nbf`, and require `type=access`. They protect `/auth/me` and all HITL routes.
 
-```python
-from sdk.langchain_adapter import IntentLockLangChainTool
+Intent verification and execution endpoints are not bearer-authenticated in this implementation; deployment must limit their network access to authorized agents. The execution endpoint acknowledges verified token consumption; it does not execute an external business action itself.
 
-def my_tool(query: str, user_prompt: str, agent_id: str):
-    return f"Query executed: {query}"
+## Security controls
 
-wrapped_tool = IntentLockLangChainTool(my_tool)
-result = wrapped_tool(
-    "SELECT * FROM users",
-    user_prompt="Run a safe analytics query",
-    agent_id="agent-123",
-)
-```
+- Intent evaluator: regex and `sqlglot` destructive-SQL checks, policy evaluation, transfer limits, and payload detection.
+- Policy engine: YAML-configured block patterns and deterministic risk scoring from `config/policies.yaml`.
+- Replay protection: `CompositeNonceStore` combines memory L1 with Redis L2. Production requires Redis configuration and Redis failure makes consumption fail closed.
+- Middleware: correlation ID propagation, baseline response headers, CORS, and process-local sliding-window request limits.
+- Logging: JSONL verification and security events with correlation IDs; tool arguments and execution tokens are not added to audit records.
+- Persistence: SQLAlchemy models for users, execution-token records, audit events, and approval requests. Only user persistence is currently used by HTTP routes; Alembic migration `0001_initial_schema` creates all four tables.
 
-The adapter sends the proposed tool name, prompt, reasoning step, and arguments to the IntentLock gateway and blocks execution if a security policy is violated.
+## Failure behavior
+
+Invalid tokens, expired tokens, replayed tokens, unavailable Redis during production nonce consumption, and blocked policy results deny the requested operation. Database readiness reports `not_ready` on database failure. If Redis is configured and unavailable, readiness also reports `not_ready`.
+
+Rate limiting and HITL use in-process state. Their process restart behavior is therefore explicit: rate-limit counters and pending approvals are lost. Redis support inside `HITLQueue` is best-effort and is not wired into the route singleton, so it must not be treated as durable approval storage.
+
+## Deployment
+
+The Docker image is a multi-stage Python 3.11 build and runs as a non-root `intentlock` user. Compose connects it to PostgreSQL 16 and Redis 7 with health checks, persistent data volumes, and production environment settings. Apply migrations before rollout and use deployment-managed secrets rather than the compose example credentials.
+
+## Key management
+
+`EnvKeyManager` provides the active execution signing key and can load/persist an Ed25519 private key from `EXECUTION_KEY_PATH`. Without that path, the execution key exists only for the running process. `KMSKeyManager` defines an extension contract but is not an active provider integration; no automatic KMS/HSM rotation exists in V4.
+
+## Operational checklist
+
+1. Set production PostgreSQL, Redis, CORS origins, and a high-entropy JWT secret.
+2. Provide and protect stable execution-signing material if token verification must survive a restart or span instances.
+3. Run `alembic upgrade head`, then confirm `alembic check` and `alembic current`.
+4. Restrict intent API ingress to trusted agents, terminate TLS upstream, and collect JSONL audit logs.
+5. Back up PostgreSQL and Redis, test restore procedures, and keep an incident playbook for credential rotation and correlation-ID investigation.
+6. Run compilation, Ruff, MyPy, pytest, coverage, Alembic, and application-import checks before release.
+
+## Extension boundaries
+
+Role-based approval authorization, durable HITL workflows, distributed rate limiting, active KMS/HSM integration, downstream-resource authorization, and automatic key rotation are not implemented by V4. They require deliberate architecture and deployment work rather than configuration-only claims.

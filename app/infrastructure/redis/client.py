@@ -1,4 +1,5 @@
 import logging
+from contextlib import suppress
 
 import redis
 
@@ -68,6 +69,23 @@ class RedisClient:
             logger.warning("Redis INCR failed for key %s: %s", key, exc)
             return None
 
+    def incr_or_raise(self, key: str, ex: int | None = None) -> int:
+        """Atomically increment a counter, raising on failure.
+
+        This is the fail-closed variant of ``incr``.  It is used by
+        security-sensitive operations (e.g. distributed rate limiting)
+        where silently degrading to unlimited would be unsafe.
+        """
+        if not self.available or self._client is None:
+            raise RedisUnavailableError("Redis is not available")
+        try:
+            value = self._client.incr(key)
+            if ex is not None:
+                self._client.expire(key, ex)
+            return int(value)
+        except redis.RedisError as exc:
+            raise RedisUnavailableError(f"Redis operation failed: {exc}") from exc
+
     def expire(self, key: str, seconds: int) -> bool:
         """Set a TTL on a key. Returns False if Redis is unavailable."""
         if not self.available or self._client is None:
@@ -90,10 +108,8 @@ class RedisClient:
 
     def close(self) -> None:
         if self._client is not None:
-            try:
+            with suppress(redis.RedisError):
                 self._client.close()
-            except redis.RedisError:
-                pass
             self._client = None
 
 

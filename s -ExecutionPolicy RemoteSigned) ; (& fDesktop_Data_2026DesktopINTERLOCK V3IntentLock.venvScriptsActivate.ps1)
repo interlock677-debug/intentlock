@@ -1,0 +1,22 @@
+[1mdiff --git a/app/infrastructure/redis/client.py b/app/infrastructure/redis/client.py[m
+[1mindex d7197af..0b2db50 100644[m
+[1m--- a/app/infrastructure/redis/client.py[m
+[1m+++ b/app/infrastructure/redis/client.py[m
+[36m@@ -1,4 +1,5 @@[m
+ import logging[m
+[32m+[m[32mfrom contextlib import suppress[m
+ [m
+ import redis[m
+ [m
+[36m@@ -90,10 +91,8 @@[m [mclass RedisClient:[m
+ [m
+     def close(self) -> None:[m
+         if self._client is not None:[m
+[31m-            try:[m
+[32m+[m[32m            with suppress(redis.RedisError):[m
+                 self._client.close()[m
+[31m-            except redis.RedisError:[m
+[31m-                pass[m
+             self._client = None[m
+ [m
+ [m

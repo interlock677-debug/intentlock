@@ -9,7 +9,7 @@ from app.infrastructure.security.jwt_token_service import JWTTokenService
 @pytest.fixture
 def token_service() -> JWTTokenService:
     return JWTTokenService(
-        secret_key="test-secret-key-that-is-at-least-32-characters-long",
+        secret_key="test-secret-key-that-is-at-least-32-characters-long",  # noqa: S106
         algorithm="HS256",
         expire_minutes=30,
     )

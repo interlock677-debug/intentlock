@@ -3,16 +3,21 @@ from contextlib import asynccontextmanager, contextmanager
 
 from sqlalchemy import create_engine
 from sqlalchemy.orm import DeclarativeBase, Session, sessionmaker
+from sqlalchemy.pool import StaticPool
 
 from app.infrastructure.config.settings import get_settings
 
 settings = get_settings()
 
-engine = create_engine(
-    settings.database_url,
-    pool_pre_ping=True,
-    connect_args={"check_same_thread": False} if settings.database_url.startswith("sqlite") else {},
-)
+_engine_kwargs: dict[str, object] = {"pool_pre_ping": True}
+if settings.database_url.startswith("sqlite"):
+    _engine_kwargs["connect_args"] = {"check_same_thread": False}
+if settings.database_url == "sqlite:///:memory:":
+    # Share a single in-memory connection across threads so the database is
+    # visible to both the application and the test client.
+    _engine_kwargs["poolclass"] = StaticPool
+
+engine = create_engine(settings.database_url, **_engine_kwargs)
 
 SessionLocal = sessionmaker(bind=engine, autocommit=False, autoflush=False, expire_on_commit=False)
 
