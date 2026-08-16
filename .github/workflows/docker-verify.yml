@@ -1,0 +1,211 @@
+name: Docker Verification
+
+on:
+  push:
+    branches: ["main", "develop"]
+  pull_request:
+    branches: ["main", "develop"]
+
+jobs:
+  docker-build-runtime:
+    runs-on: ubuntu-latest
+    if: github.event_name == 'push' || github.event.pull_request.head.repo.full_name == github.repository
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Build Docker image
+        run: docker compose build
+
+      - name: Verify image metadata
+        run: |
+          IMAGE_ID=$(docker images intentlock:latest --format "{{.ID}}")
+          echo "Built image: $IMAGE_ID"
+          docker inspect intentlock:latest --format '{{json .Config.Labels}}' | jq .
+
+      - name: Create ephemeral CI test environment file
+        run: |
+          cat > .env.test <<EOF
+          POSTGRES_PASSWORD=intentlock_test_secret_$(date +%s)
+          REDIS_PASSWORD=intentlock_redis_test_secret_$(date +%s)
+          JWT_SECRET_KEY=test-secret-key-that-is-at-least-32-characters-long
+          EOF
+          echo "Created ephemeral .env.test"
+
+      - name: Start services
+        run: |
+          docker compose --env-file .env.test up -d
+
+      - name: Wait for all service healthchecks
+        run: |
+          for service in db redis app; do
+            for i in $(seq 1 60); do
+              STATUS=$(docker compose --env-file .env.test ps $service --format "{{.State}}")
+              if echo "$STATUS" | grep -q "healthy"; then
+                echo "$service is healthy"
+                break
+              fi
+              echo "Waiting for $service to become healthy... ($i/60)"
+              sleep 2
+            done
+            if ! echo "$STATUS" | grep -q "healthy"; then
+              echo "ERROR: $service did not become healthy in time"
+              docker compose --env-file .env.test ps
+              docker compose --env-file .env.test logs $service
+              exit 1
+            fi
+          done
+
+      - name: Verify PostgreSQL authentication
+        run: |
+          PGPASSWORD=$(grep POSTGRES_PASSWORD .env.test | cut -d'=' -f2)
+          echo "Testing PostgreSQL with correct password..."
+          docker exec intentlock-db-1 psql -U intentlock -d intentlock -c "SELECT 1;" >/dev/null 2>&1
+          if [ $? -ne 0 ]; then
+            echo "ERROR: PostgreSQL rejected correct password"
+            exit 1
+          fi
+          echo "PostgreSQL accepts correct password"
+          echo "Testing PostgreSQL without password (should fail)..."
+          docker exec intentlock-db-1 sh -c 'PGPASSWORD="" psql -U intentlock -d intentlock -c "SELECT 1;" 2>&1' >/dev/null 2>&1
+          if [ $? -eq 0 ]; then
+            echo "ERROR: PostgreSQL accepted empty password"
+            exit 1
+          fi
+          echo "PostgreSQL correctly rejects empty password"
+
+      - name: Verify Redis authentication
+        run: |
+          REDIS_PASSWORD=$(grep REDIS_PASSWORD .env.test | cut -d'=' -f2)
+          echo "Testing Redis with correct password..."
+          docker exec intentlock-redis-1 redis-cli --no-auth-warning -a "$REDIS_PASSWORD" ping
+          if [ $? -ne 0 ]; then
+            echo "ERROR: Redis rejected correct password"
+            exit 1
+          fi
+          echo "Redis accepts correct password"
+          echo "Testing Redis without password (should fail)..."
+          docker exec intentlock-redis-1 redis-cli --no-auth-warning ping 2>&1 | grep -q "NOAUTH"
+          if [ $? -ne 0 ]; then
+            echo "ERROR: Redis did not reject unauthenticated access"
+            exit 1
+          fi
+          echo "Redis correctly rejects unauthenticated access"
+
+      - name: Verify application health endpoint
+        run: |
+          curl -f http://localhost:8000/api/v1/health
+
+      - name: Verify application readiness endpoint
+        run: |
+          curl -f http://localhost:8000/api/v1/ready
+
+      - name: Verify non-root execution
+        run: |
+          CONTAINER_USER=$(docker inspect intentlock-app-1 --format '{{.Config.User}}')
+          echo "Container configured as user: $CONTAINER_USER"
+          if [ -z "$CONTAINER_USER" ] || [ "$CONTAINER_USER" = "root" ] || [ "$CONTAINER_USER" = "0:0" ]; then
+            echo "ERROR: Container is configured to run as root"
+            exit 1
+          fi
+          EXEC_UID=$(docker exec intentlock-app-1 id -u)
+          echo "Exec UID: $EXEC_UID"
+          if [ "$EXEC_UID" = "0" ]; then
+            echo "ERROR: Container process is running as root"
+            exit 1
+          fi
+          echo "Non-root execution verified"
+
+      - name: Verify no-new-privileges security option
+        run: |
+          SECURITY_OPTS=$(docker inspect intentlock-app-1 --format '{{json .HostConfig.SecurityOpt}}')
+          echo "Security options: $SECURITY_OPTS"
+          echo "$SECURITY_OPTS" | grep -q "no-new-privileges"
+          if [ $? -ne 0 ]; then
+            echo "ERROR: no-new-privileges security option is not set"
+            exit 1
+          fi
+          echo "no-new-privileges verified"
+
+      - name: Verify tmpfs mount and security options
+        run: |
+          TMPFS=$(docker inspect intentlock-app-1 --format '{{json .HostConfig.Tmpfs}}')
+          echo "Tmpfs mounts: $TMPFS"
+          echo "$TMPFS" | grep -q "/tmp/intentlock"
+          if [ $? -ne 0 ]; then
+            echo "ERROR: /tmp/intentlock tmpfs mount is not present"
+            exit 1
+          fi
+          echo "$TMPFS" | grep -q "noexec"
+          if [ $? -ne 0 ]; then
+            echo "ERROR: tmpfs mount does not include noexec"
+            exit 1
+          fi
+          echo "$TMPFS" | grep -q "nosuid"
+          if [ $? -ne 0 ]; then
+            echo "ERROR: tmpfs mount does not include nosuid"
+            exit 1
+          fi
+          echo "tmpfs mount and security options verified"
+
+      - name: Verify network isolation
+        run: |
+          NETWORKS=$(docker inspect intentlock-app-1 --format '{{json .NetworkSettings.Networks}}')
+          echo "Container networks: $NETWORKS"
+          NETWORK_COUNT=$(echo "$NETWORKS" | jq 'length')
+          if [ "$NETWORK_COUNT" -ne 1 ]; then
+            echo "ERROR: Expected 1 network, found $NETWORK_COUNT"
+            exit 1
+          fi
+          echo "$NETWORKS" | grep -q "intentlock-net"
+          if [ $? -ne 0 ]; then
+            echo "ERROR: Container is not attached to intentlock-net"
+            exit 1
+          fi
+          echo "Network isolation verified"
+
+      - name: Verify secret exposure absent
+        run: |
+          SECRETS=$(docker exec intentlock-app-1 sh -c '
+            grep -r -i -E "(password|secret|key|token|api_key)" \
+              /app/config \
+              /app/app \
+              /opt/venv/lib/python*/site-packages/ \
+              /usr/local/lib/python*/dist-packages/ \
+              2>/dev/null \
+            | grep -v -E "(\"secret\"|'"'"'secret'"'"'|SECRET_KEY|jwt_secret_key|EXAMPLE|sample|placeholder|test-secret|deprecated)" \
+            || true
+          ')
+          if [ -n "$SECRETS" ]; then
+            echo "ERROR: Possible secrets found in container:"
+            echo "$SECRETS"
+            exit 1
+          fi
+          echo "No secret exposure detected in container image"
+
+      - name: Verify container restart behavior
+        run: |
+          docker restart intentlock-app-1
+          sleep 10
+          curl -f http://localhost:8000/api/v1/health
+          curl -f http://localhost:8000/api/v1/ready
+          echo "Container restart verified"
+
+      - name: Verify volumes removed after teardown
+        run: |
+          docker compose --env-file .env.test down -v
+          sleep 2
+          REMAINING=$(docker volume ls --format "{{.Name}}" | grep -E "intentlock.*_(data|logs)" || true)
+          if [ -n "$REMAINING" ]; then
+            echo "ERROR: Volumes were not removed:"
+            echo "$REMAINING"
+            exit 1
+          fi
+          echo "Volumes successfully removed"
+
+      - name: Cleanup ephemeral environment file
+        if: always()
+        run: rm -f .env.test
