@@ -1,12 +1,11 @@
 # IntentLock v4.0 Policy Configuration
 #
-# This file configures the deterministic policy engine.
-# All thresholds are explicitly configurable — no hardcoded financial limits.
+# This file configures both the legacy text-risk PolicyEngine and the
+# new CentralPolicyEngine.  All thresholds are explicitly configurable.
 
-# Risk score threshold for blocking an action (0.0 - 1.0)
+# Legacy text-risk configuration (used by PolicyEngine)
 score_threshold: 0.5
 
-# Substring patterns that trigger an automatic block when found in intent text
 blocked_patterns:
   - "drop table"
   - "truncate table"
@@ -15,3 +14,38 @@ blocked_patterns:
   - "powershell -enc"
   - "delete from users"
   - "update users set"
+
+# Central policy engine configuration (used by CentralPolicyEngine)
+policy_version: "1"
+default_effect: allow
+
+rules:
+  - id: "deny-dangerous-tools"
+    version: "1"
+    effect: deny
+    description: "Deny execution of dangerous tools"
+    match:
+      tool:
+        - "execute_sql"
+        - "shell"
+        - "dangerous_command"
+    priority: 100
+
+  - id: "hitl-financial-transfers"
+    version: "1"
+    effect: require_hitl
+    description: "Require human approval for financial transfer tools"
+    match:
+      tool: "transfer_funds"
+    priority: 50
+
+  - id: "allow-search-and-read"
+    version: "1"
+    effect: allow
+    description: "Allow search and read tools for all agents"
+    match:
+      tool:
+        - "search"
+        - "read"
+        - "list"
+    priority: 10

@@ -14,7 +14,7 @@ from __future__ import annotations
 
 import time
 
-from app.infrastructure.redis.client import RedisClient, RedisUnavailableError
+from app.infrastructure.redis.client import RedisClient
 
 _KEY_PREFIX = "rate_limit"
 
