@@ -1,5 +1,6 @@
 import time
 from pathlib import Path
+from unittest.mock import patch
 from uuid import uuid4
 
 import jwt
@@ -10,6 +11,7 @@ from app.infrastructure.security.ed25519_execution_token_service import Ed25519E
 from app.infrastructure.security.env_key_manager import EnvKeyManager
 from app.infrastructure.security.jwt_token_service import JWTTokenService
 from app.infrastructure.security.memory_nonce_store import MemoryNonceStore
+from app.infrastructure.security.versioned_key_manager import VersionedKeyManager
 
 
 def test_env_key_manager(tmp_path: Path) -> None:
@@ -177,3 +179,33 @@ def test_memory_nonce_store_limits_and_eviction() -> None:
     # Expiration eviction
     time.sleep(1.1)
     assert store.is_consumed("n2") is False
+
+
+def test_get_key_manager_returns_versioned_when_key_dir_set(tmp_path: Path) -> None:
+    from app.presentation.api.dependencies import security
+
+    security.get_key_manager.cache_clear()
+    try:
+        with patch.object(security, "get_settings") as mock_settings:
+            mock_settings.return_value.key_dir = str(tmp_path / "keys")
+            mock_settings.return_value.execution_key_path = None
+            mock_settings.return_value.jwt_secret_key = "secret123"
+            km = security.get_key_manager()
+        assert isinstance(km, VersionedKeyManager)
+    finally:
+        security.get_key_manager.cache_clear()
+
+
+def test_get_key_manager_returns_env_when_no_key_dir() -> None:
+    from app.presentation.api.dependencies import security
+
+    security.get_key_manager.cache_clear()
+    try:
+        with patch.object(security, "get_settings") as mock_settings:
+            mock_settings.return_value.key_dir = None
+            mock_settings.return_value.execution_key_path = None
+            mock_settings.return_value.jwt_secret_key = "secret123"
+            km = security.get_key_manager()
+        assert isinstance(km, EnvKeyManager)
+    finally:
+        security.get_key_manager.cache_clear()

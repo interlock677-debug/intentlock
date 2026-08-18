@@ -362,6 +362,7 @@ async def test_repository_updates_existing_user(db_session) -> None:
             hashed_password="hash1",
             is_active=True,
             created_at=__import__("datetime").datetime.now(__import__("datetime").UTC),
+            tenant_id="test-tenant",
         )
     )
     updated = await repo.save(
@@ -371,7 +372,24 @@ async def test_repository_updates_existing_user(db_session) -> None:
             hashed_password="hash2",
             is_active=False,
             created_at=existing.created_at,
+            tenant_id="test-tenant",
         )
     )
     assert updated.hashed_password == "hash2"
     assert updated.is_active is False
+
+
+def test_settings_trusted_proxies_parses_string() -> None:
+    settings = Settings(
+        trusted_proxies="10.0.0.1, 127.0.0.1",
+        _env_file=None,
+    )
+    assert settings.trusted_proxies == ["10.0.0.1", "127.0.0.1"]
+
+
+def test_settings_trusted_proxies_returns_empty_for_invalid_type() -> None:
+    settings = Settings(
+        trusted_proxies=42,  # type: ignore[call-arg]
+        _env_file=None,
+    )
+    assert settings.trusted_proxies == []

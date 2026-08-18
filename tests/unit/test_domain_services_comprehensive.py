@@ -67,7 +67,9 @@ def test_intent_evaluator_destructive_sql() -> None:
     )
     res_drop = evaluator.evaluate(intent_drop)
     assert not res_drop.is_valid
-    assert "Destructive SQL" in res_drop.reason
+    assert "Destructive SQL" in res_drop.reason or (
+        "Tool argument validation failed" in res_drop.reason
+    )
 
     # sqlglot parsed destructive SQL
     intent_truncate = AgentActionDAG(

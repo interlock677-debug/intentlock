@@ -13,8 +13,10 @@ os.environ.setdefault(
 os.environ.setdefault("DATABASE_URL", "sqlite:///:memory:")
 os.environ.setdefault("APP_ENV", "test")
 os.environ.setdefault("DEBUG", "true")
+os.environ.setdefault("COMPLIANCE_SECRET_KEY", "test-compliance-secret-key")
 
 from app.infrastructure.config.settings import get_settings  # noqa: E402
+from app.infrastructure.logging.audit_logger import LOG_PATH  # noqa: E402
 from app.infrastructure.persistence.database import (  # noqa: E402
     Base,
     SessionLocal,
@@ -35,6 +37,13 @@ def _reset_settings_cache() -> Generator[None, None, None]:
     get_settings.cache_clear()
     reset_security_dependencies()
     reset_rate_limits()
+
+
+@pytest.fixture(autouse=True)
+def _clear_audit_log() -> Generator[None, None, None]:
+    if LOG_PATH.exists():
+        LOG_PATH.unlink()
+    yield
 
 
 @pytest.fixture(autouse=True)

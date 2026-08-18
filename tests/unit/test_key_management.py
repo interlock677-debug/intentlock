@@ -17,7 +17,6 @@ from uuid import uuid4
 
 import jwt
 import pytest
-from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric.ed25519 import (
     Ed25519PrivateKey,
     Ed25519PublicKey,
@@ -29,7 +28,6 @@ from app.application.interfaces.hsm_key_provider import (
     HSMUnavailableError,
     SimulatedHSMKeyProvider,
 )
-from app.application.interfaces.key_manager import KeyManager
 from app.domain.exceptions.domain_errors import ExecutionTokenError
 from app.infrastructure.security.ed25519_execution_token_service import (
     Ed25519ExecutionTokenService,
@@ -38,7 +36,6 @@ from app.infrastructure.security.env_key_manager import EnvKeyManager
 from app.infrastructure.security.kms_key_manager import KMSKeyManager
 from app.infrastructure.security.memory_nonce_store import MemoryNonceStore
 from app.infrastructure.security.versioned_key_manager import VersionedKeyManager
-
 
 # --------------------------------------------------------------------------- #
 # Test double: a real HSM provider that signs with in-memory keys
@@ -364,7 +361,9 @@ def test_versioned_key_manager_delete_ghost_key_file(tmp_path: Path) -> None:
 # --------------------------------------------------------------------------- #
 
 
-def _make_hsm_versioned_key_manager(tmp_path: Path) -> tuple[VersionedKeyManager, _SigningHSMProvider]:
+def _make_hsm_versioned_key_manager(
+    tmp_path: Path,
+) -> tuple[VersionedKeyManager, _SigningHSMProvider]:
     """Create a VersionedKeyManager backed by an HSM provider.
 
     The key is persisted to disk first (via a key_dir), then loaded into

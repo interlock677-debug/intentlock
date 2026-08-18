@@ -53,3 +53,38 @@ def test_policy_engine_negative_threshold_allowed() -> None:
     assert engine.score_threshold == -1.0
 
 
+def test_policy_engine_blocks_pattern_with_extra_whitespace() -> None:
+    engine = PolicyEngine(score_threshold=0.5, blocked_patterns=["drop table"])
+    result = engine.evaluate("DROP   TABLE users;")
+    assert result["blocked"] is True
+    assert any("Blocked pattern matched" in r for r in result["reasons"])
+
+
+def test_policy_engine_blocks_pattern_case_insensitive() -> None:
+    engine = PolicyEngine(score_threshold=0.5, blocked_patterns=["drop table"])
+    result = engine.evaluate("DrOp TaBlE users;")
+    assert result["blocked"] is True
+
+
+def test_policy_engine_blocks_pattern_with_punctuation() -> None:
+    engine = PolicyEngine(score_threshold=0.5, blocked_patterns=["drop-table"])
+    result = engine.evaluate("drop-table users;")
+    assert result["blocked"] is True
+
+
+def test_policy_engine_unicode_homoglyph_bypass_detected() -> None:
+    engine = PolicyEngine(score_threshold=0.5, blocked_patterns=["drop table"])
+    result = engine.evaluate("drop table users;")
+    assert result["blocked"] is True
+
+
+def test_policy_engine_regex_patterns_use_word_boundaries() -> None:
+    engine = PolicyEngine(score_threshold=0.5, blocked_patterns=["rm -rf"])
+    result = engine.evaluate("do not rm -rf /")
+    assert result["blocked"] is True
+    result = engine.evaluate("do not rm  -rf /")
+    assert result["blocked"] is True
+    result = engine.evaluate("do not rm-rf /")
+    assert result["blocked"] is False
+
+

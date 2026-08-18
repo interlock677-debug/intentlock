@@ -136,3 +136,47 @@ def test_jwks_contains_public_key(token_service: Ed25519ExecutionTokenService) -
     assert key["crv"] == "Ed25519"
     assert key["alg"] == "EdDSA"
     assert "x" in key
+
+
+def test_token_with_subject_binds_to_authenticated_user() -> None:
+    """Execution token with a subject claim binds the token to the authenticated user.
+
+    The ``subject`` parameter sets the JWT ``sub`` claim, while ``agent_id``
+    is preserved as a separate claim.  This ensures the enforcement layer
+    can independently verify the caller's identity via the token.
+    """
+    key_manager = EnvKeyManager(jwt_secret="test-secret-key-that-is-at-least-32-characters-long")
+    nonce_store = MemoryNonceStore()
+    svc = Ed25519ExecutionTokenService(
+        key_manager=key_manager,
+        nonce_store=nonce_store,
+    )
+
+    token = svc.create_execution_token(
+        agent_id="agent-abc",
+        tool="transfer",
+        ttl_seconds=60,
+        subject="user-uuid-123",
+    )
+    payload = svc.verify_execution_token(token)
+    assert payload["sub"] == "user-uuid-123"
+    assert payload["agent_id"] == "agent-abc"
+
+
+def test_token_without_subject_uses_agent_id_as_sub() -> None:
+    """When no subject is provided, the agent_id is used as the sub claim (backward compat)."""
+    key_manager = EnvKeyManager(jwt_secret="test-secret-key-that-is-at-least-32-characters-long")
+    nonce_store = MemoryNonceStore()
+    svc = Ed25519ExecutionTokenService(
+        key_manager=key_manager,
+        nonce_store=nonce_store,
+    )
+
+    token = svc.create_execution_token(
+        agent_id="agent-abc",
+        tool="transfer",
+        ttl_seconds=60,
+    )
+    payload = svc.verify_execution_token(token)
+    assert payload["sub"] == "agent-abc"
+    assert payload["agent_id"] == "agent-abc"

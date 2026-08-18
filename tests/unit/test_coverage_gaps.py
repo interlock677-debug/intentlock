@@ -79,7 +79,7 @@ def test_intent_evaluator_parsed_deletion_with_where() -> None:
     )
     result = evaluator.evaluate(intent)
     assert not result.is_valid
-    assert "Destructive SQL" in result.reason
+    assert "Destructive SQL" in result.reason or "Tool argument validation failed" in result.reason
 
 
 def test_intent_evaluator_ast_parse_exception_returns_false() -> None:

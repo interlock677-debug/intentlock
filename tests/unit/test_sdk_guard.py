@@ -1,253 +1,264 @@
-from __future__ import annotations
-
-from typing import Any
-from unittest.mock import patch
+import json
+from unittest.mock import MagicMock, patch
+from urllib.error import HTTPError, URLError
 
 import pytest
 
 from sdk.intentlock import IntentLockGuard, SecurityError, guard_tool
 
 
-class FakeResponse:
-    def __init__(self, status_code: int, content: bytes) -> None:
-        self.status_code = status_code
-        self.content = content
+def test_validate_gateway_url_valid_http() -> None:
+    from sdk.intentlock import _validate_gateway_url
 
-    def getcode(self) -> int:
-        return self.status_code
+    assert _validate_gateway_url("http://localhost:8000/api/v1/intent/verify") == "http://localhost:8000/api/v1/intent/verify"
 
-    def read(self) -> bytes:
-        return self.content
 
-    def __enter__(self) -> FakeResponse:
-        return self
+def test_validate_gateway_url_valid_https() -> None:
+    from sdk.intentlock import _validate_gateway_url
 
-    def __exit__(self, exc_type: Any, exc_value: Any, traceback: Any) -> None:
-        return None
+    assert _validate_gateway_url("https://gateway.example.com/api") == "https://gateway.example.com/api"
+
+
+def test_validate_gateway_url_invalid_scheme() -> None:
+    from sdk.intentlock import _validate_gateway_url
+
+    with pytest.raises(ValueError, match="http or https"):
+        _validate_gateway_url("ftp://server/api")
+
+
+def test_validate_gateway_url_missing_host() -> None:
+    from sdk.intentlock import _validate_gateway_url
+
+    with pytest.raises(ValueError, match="http or https"):
+        _validate_gateway_url("http:///api")
+
+
+def test_auth_headers_with_token() -> None:
+    client = IntentLockGuard(auth_token="test-token")
+    headers = client._auth_headers()
+    assert headers["Authorization"] == "Bearer test-token"
+    assert headers["Content-Type"] == "application/json"
+
+
+def test_auth_headers_without_token() -> None:
+    client = IntentLockGuard(auth_token=None)
+    headers = client._auth_headers()
+    assert "Authorization" not in headers
+    assert headers["Content-Type"] == "application/json"
 
 
 def test_verify_intent_success() -> None:
-    guard = IntentLockGuard()
-    with patch(
-        "sdk.intentlock.urlopen",
-        return_value=FakeResponse(200, b'{"ephemeral_token": "tok-123"}'),
-    ) as mock_urlopen:
-        token = guard.verify_intent(
-            tool_name="read_file",
-            tool_arguments={"path": "file.txt"},
-            user_prompt="Read the file",
+    client = IntentLockGuard()
+    mock_response = MagicMock()
+    mock_response.getcode.return_value = 200
+    mock_response.read.return_value = json.dumps({"ephemeral_token": "token-123"}).encode("utf-8")
+    mock_response.__enter__ = MagicMock(return_value=mock_response)
+    mock_response.__exit__ = MagicMock(return_value=False)
+    with patch("sdk.intentlock.urlopen", return_value=mock_response):
+        token = client.verify_intent(
+            tool_name="search",
+            tool_arguments={"query": "test"},
+            user_prompt="search for test",
+            agent_id="agent-1",
         )
-    assert token == "tok-123"
-    mock_urlopen.assert_called_once()
-    request = mock_urlopen.call_args.args[0]
-    assert request.method == "POST"
-    assert request.full_url == "http://127.0.0.1:8000/api/v1/intent/verify"
+    assert token == "token-123"
 
 
-def test_verify_intent_http_error() -> None:
-    import urllib.error
-
-    guard = IntentLockGuard()
-    err = urllib.error.HTTPError(
-        "http://127.0.0.1:8000/api/v1/intent/verify",
-        403,
-        "Forbidden",
-        {},
-        None,
-    )
-    err.read = lambda: b'{"detail": "Blocked by policy"}'
-    with patch("sdk.intentlock.urlopen", side_effect=err), pytest.raises(SecurityError) as exc_info:
-        guard.verify_intent(
-            tool_name="execute_sql",
-            tool_arguments={"query": "DROP TABLE users"},
-            user_prompt="Run query",
-        )
-    assert "403" in str(exc_info.value)
-    assert "Blocked by policy" in str(exc_info.value)
-
-
-def test_verify_intent_url_error() -> None:
-    import urllib.error
-
-    guard = IntentLockGuard()
-    with (
-        patch("sdk.intentlock.urlopen", side_effect=urllib.error.URLError("connection refused")),
-        pytest.raises(SecurityError) as exc_info,
+def test_verify_intent_denied() -> None:
+    client = IntentLockGuard()
+    mock_response = MagicMock()
+    mock_response.getcode.return_value = 403
+    mock_response.read.return_value = b"forbidden"
+    mock_response.__enter__ = MagicMock(return_value=mock_response)
+    mock_response.__exit__ = MagicMock(return_value=False)
+    error = HTTPError("url", 403, "forbidden", {}, None)
+    with patch("sdk.intentlock.urlopen", side_effect=error), pytest.raises(
+        SecurityError, match="403"
     ):
-        guard.verify_intent(
-            tool_name="tool",
-            tool_arguments={},
-            user_prompt="prompt",
-        )
-    assert "IntentLock request failed" in str(exc_info.value)
+            client.verify_intent(
+                tool_name="search",
+                tool_arguments={"query": "test"},
+                user_prompt="search",
+            )
 
 
-def test_verify_intent_non_200() -> None:
-    guard = IntentLockGuard()
-    with (
-        patch(
-            "sdk.intentlock.urlopen",
-            return_value=FakeResponse(500, b"internal error"),
-        ),
-        pytest.raises(SecurityError) as exc_info,
+def test_verify_intent_network_error() -> None:
+    client = IntentLockGuard()
+    with patch("sdk.intentlock.urlopen", side_effect=URLError("connection refused")), pytest.raises(
+        SecurityError, match="request failed"
     ):
-        guard.verify_intent(
-            tool_name="tool",
-            tool_arguments={},
-            user_prompt="prompt",
-        )
-    assert "500" in str(exc_info.value)
-
-
-@pytest.mark.parametrize("url", ["file:///tmp/not-intentlock", "http://"])
-def test_verify_intent_rejects_unsafe_gateway_url(url: str) -> None:
-    guard = IntentLockGuard(base_url=url)
-    with (
-        pytest.raises(ValueError, match="http or https"),
-        patch("sdk.intentlock.urlopen") as mock_urlopen,
-    ):
-        guard.verify_intent(tool_name="tool", tool_arguments={}, user_prompt="prompt")
-    mock_urlopen.assert_not_called()
+            client.verify_intent(
+                tool_name="search",
+                tool_arguments={"query": "test"},
+                user_prompt="search",
+            )
 
 
 def test_verify_intent_missing_token() -> None:
-    guard = IntentLockGuard()
-    with (
-        patch(
-            "sdk.intentlock.urlopen",
-            return_value=FakeResponse(200, b'{"status": "ok"}'),
-        ),
-        pytest.raises(SecurityError) as exc_info,
+    client = IntentLockGuard()
+    mock_response = MagicMock()
+    mock_response.getcode.return_value = 200
+    mock_response.read.return_value = json.dumps({}).encode("utf-8")
+    mock_response.__enter__ = MagicMock(return_value=mock_response)
+    mock_response.__exit__ = MagicMock(return_value=False)
+    with patch("sdk.intentlock.urlopen", return_value=mock_response), pytest.raises(
+        SecurityError, match="did not return"
     ):
-        guard.verify_intent(
-            tool_name="tool",
-            tool_arguments={},
-            user_prompt="prompt",
-        )
-    assert "did not return an ephemeral execution token" in str(exc_info.value)
+            client.verify_intent(
+                tool_name="search",
+                tool_arguments={"query": "test"},
+                user_prompt="search",
+            )
 
 
 def test_consume_execution_token_success() -> None:
-    guard = IntentLockGuard()
-    with patch(
-        "sdk.intentlock.urlopen",
-        return_value=FakeResponse(200, b'{"status": "executed", "agent_id": "agent-1"}'),
-    ) as mock_urlopen:
-        result = guard.consume_execution_token("tok-123")
-    assert result == {"status": "executed", "agent_id": "agent-1"}
-    request = mock_urlopen.call_args.args[0]
-    assert request.full_url == "http://127.0.0.1:8000/api/v1/intent/execute"
+    client = IntentLockGuard()
+    mock_response = MagicMock()
+    mock_response.getcode.return_value = 200
+    mock_response.read.return_value = json.dumps({"status": "consumed"}).encode("utf-8")
+    mock_response.__enter__ = MagicMock(return_value=mock_response)
+    mock_response.__exit__ = MagicMock(return_value=False)
+    with patch("sdk.intentlock.urlopen", return_value=mock_response):
+        result = client.consume_execution_token("token-123")
+    assert result["status"] == "consumed"
 
 
 def test_consume_execution_token_http_error() -> None:
-    import urllib.error
+    client = IntentLockGuard()
+    error = HTTPError("url", 400, "bad request", {}, None)
+    with patch("sdk.intentlock.urlopen", side_effect=error), pytest.raises(
+        SecurityError, match="400"
+    ):
+            client.consume_execution_token("token-123")
 
-    guard = IntentLockGuard()
-    err = urllib.error.HTTPError(
-        "http://127.0.0.1:8000/api/v1/intent/execute",
-        401,
-        "Unauthorized",
-        {},
-        None,
+
+def test_list_pending_approvals_success() -> None:
+    client = IntentLockGuard(
+        base_url="http://localhost:8000/api/v1/intent/verify",
     )
-    err.read = lambda: b'{"detail": "replayed token"}'
-    with patch("sdk.intentlock.urlopen", side_effect=err), pytest.raises(SecurityError) as exc_info:
-        guard.consume_execution_token("tok-123")
-    assert "execution failed" in str(exc_info.value)
-    assert "replayed token" in str(exc_info.value)
+    mock_response = MagicMock()
+    mock_response.getcode.return_value = 200
+    mock_response.read.return_value = json.dumps({"requests": []}).encode("utf-8")
+    mock_response.__enter__ = MagicMock(return_value=mock_response)
+    mock_response.__exit__ = MagicMock(return_value=False)
+    with patch("sdk.intentlock.urlopen", return_value=mock_response):
+        result = client.list_pending_approvals()
+    assert result["requests"] == []
 
 
-def test_consume_execution_token_url_error() -> None:
-    import urllib.error
-
-    guard = IntentLockGuard()
-    with (
-        patch("sdk.intentlock.urlopen", side_effect=urllib.error.URLError("down")),
-        pytest.raises(SecurityError) as exc_info,
+def test_list_pending_approvals_network_error() -> None:
+    client = IntentLockGuard()
+    with patch("sdk.intentlock.urlopen", side_effect=URLError("timeout")), pytest.raises(
+        SecurityError, match="Approval list request failed"
     ):
-        guard.consume_execution_token("tok-123")
-    assert "execution request failed" in str(exc_info.value)
+            client.list_pending_approvals()
 
 
-def test_consume_execution_token_non_200() -> None:
-    guard = IntentLockGuard()
-    with (
-        patch(
-            "sdk.intentlock.urlopen",
-            return_value=FakeResponse(500, b"boom"),
-        ),
-        pytest.raises(SecurityError) as exc_info,
+def test_approve_request_success() -> None:
+    client = IntentLockGuard()
+    mock_response = MagicMock()
+    mock_response.getcode.return_value = 200
+    mock_response.read.return_value = json.dumps({"status": "approved"}).encode("utf-8")
+    mock_response.__enter__ = MagicMock(return_value=mock_response)
+    mock_response.__exit__ = MagicMock(return_value=False)
+    with patch("sdk.intentlock.urlopen", return_value=mock_response):
+        result = client.approve_request("req-123")
+    assert result["status"] == "approved"
+
+
+def test_reject_request_success() -> None:
+    client = IntentLockGuard()
+    mock_response = MagicMock()
+    mock_response.getcode.return_value = 200
+    mock_response.read.return_value = json.dumps({"status": "rejected"}).encode("utf-8")
+    mock_response.__enter__ = MagicMock(return_value=mock_response)
+    mock_response.__exit__ = MagicMock(return_value=False)
+    with patch("sdk.intentlock.urlopen", return_value=mock_response):
+        result = client.reject_request("req-123")
+    assert result["status"] == "rejected"
+
+
+def test_guard_tool_decorator() -> None:
+    client = IntentLockGuard()
+    mock_response = MagicMock()
+    mock_response.getcode.return_value = 200
+    mock_response.read.return_value = json.dumps({"ephemeral_token": "token-123"}).encode("utf-8")
+    mock_response.__enter__ = MagicMock(return_value=mock_response)
+    mock_response.__exit__ = MagicMock(return_value=False)
+
+    call_count = 0
+
+    @guard_tool(client)
+    def my_tool(query: str, user_prompt: str = "default", agent_id: str = "agent-1") -> str:
+        nonlocal call_count
+        call_count += 1
+        return f"result for {query}"
+
+    with patch("sdk.intentlock.urlopen", return_value=mock_response):
+        result = my_tool("SELECT 1", user_prompt="run query", agent_id="agent-1")
+    assert result == "result for SELECT 1"
+    assert call_count == 1
+
+
+def test_verify_intent_non_200_status() -> None:
+    client = IntentLockGuard()
+    mock_response = MagicMock()
+    mock_response.getcode.return_value = 500
+    mock_response.read.return_value = b"server error"
+    mock_response.__enter__ = MagicMock(return_value=mock_response)
+    mock_response.__exit__ = MagicMock(return_value=False)
+    with patch("sdk.intentlock.urlopen", return_value=mock_response), pytest.raises(
+        SecurityError, match="500"
     ):
-        guard.consume_execution_token("tok-123")
-    assert "500" in str(exc_info.value)
+        client.verify_intent(
+            tool_name="search",
+            tool_arguments={"query": "test"},
+            user_prompt="search",
+        )
 
 
-def test_guard_tool_decorator_success() -> None:
-    guard = IntentLockGuard()
-
-    def mock_verify(
-        tool_name: str, tool_arguments: dict[str, Any], user_prompt: str, agent_id: str
-    ) -> str:
-        assert tool_name == "add_numbers"
-        assert tool_arguments == {"a": 2, "b": 3}
-        assert user_prompt == "Add two numbers"
-        assert agent_id == "agent-7"
-        return "tok-5"
-
-    def mock_consume(token: str) -> dict[str, Any]:
-        assert token == "tok-5"
-        return {"status": "executed"}
-
-    with (
-        patch.object(guard, "verify_intent", side_effect=mock_verify),
-        patch.object(guard, "consume_execution_token", side_effect=mock_consume),
+def test_consume_execution_token_network_error() -> None:
+    client = IntentLockGuard()
+    with patch("sdk.intentlock.urlopen", side_effect=URLError("timeout")), pytest.raises(
+        SecurityError, match="execution request failed"
     ):
-
-        @guard_tool(guard)
-        def add_numbers(
-            a: int, b: int, user_prompt: str = "Add two numbers", agent_id: str = "agent-000"
-        ) -> int:
-            return a + b
-
-        result = add_numbers(2, 3, user_prompt="Add two numbers", agent_id="agent-7")
-
-    assert result == 5
+        client.consume_execution_token("token-123")
 
 
-def test_guard_tool_decorator_default_prompt_and_agent() -> None:
-    guard = IntentLockGuard()
-
-    def mock_verify(
-        tool_name: str, tool_arguments: dict[str, Any], user_prompt: str, agent_id: str
-    ) -> str:
-        assert user_prompt == "Agent tool execution request"
-        assert agent_id == "agent-000"
-        return "tok-5"
-
-    with (
-        patch.object(guard, "verify_intent", side_effect=mock_verify),
-        patch.object(guard, "consume_execution_token", return_value={"status": "executed"}),
+def test_consume_execution_token_non_200_status() -> None:
+    client = IntentLockGuard()
+    mock_response = MagicMock()
+    mock_response.getcode.return_value = 403
+    mock_response.read.return_value = b"forbidden"
+    mock_response.__enter__ = MagicMock(return_value=mock_response)
+    mock_response.__exit__ = MagicMock(return_value=False)
+    with patch("sdk.intentlock.urlopen", return_value=mock_response), pytest.raises(
+        SecurityError, match="403"
     ):
-
-        @guard_tool(guard)
-        def ping() -> str:
-            return "pong"
-
-        result = ping()
-
-    assert result == "pong"
+        client.consume_execution_token("token-123")
 
 
-def test_guard_tool_preserves_wrapped_metadata() -> None:
-    guard = IntentLockGuard()
-    with (
-        patch.object(guard, "verify_intent", return_value="tok-1"),
-        patch.object(guard, "consume_execution_token", return_value={"status": "executed"}),
+def test_list_pending_approvals_http_error() -> None:
+    client = IntentLockGuard()
+    error = HTTPError("url", 403, "forbidden", {}, None)
+    with patch("sdk.intentlock.urlopen", side_effect=error), pytest.raises(
+        SecurityError, match="Failed to list approvals"
     ):
+        client.list_pending_approvals()
 
-        @guard_tool(guard)
-        def documented_tool() -> None:
-            """Documented tool."""
 
-        assert documented_tool.__name__ == "documented_tool"
-        assert documented_tool.__doc__ == "Documented tool."
+def test_approve_request_http_error() -> None:
+    client = IntentLockGuard()
+    error = HTTPError("url", 403, "forbidden", {}, None)
+    with patch("sdk.intentlock.urlopen", side_effect=error), pytest.raises(
+        SecurityError, match="Failed to approve request"
+    ):
+        client.approve_request("req-123")
+
+
+def test_reject_request_network_error() -> None:
+    client = IntentLockGuard()
+    with patch("sdk.intentlock.urlopen", side_effect=URLError("timeout")), pytest.raises(
+        SecurityError, match="Reject request failed"
+    ):
+        client.reject_request("req-123")

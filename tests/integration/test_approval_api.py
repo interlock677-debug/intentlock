@@ -1,22 +1,42 @@
 import pytest
 from fastapi.testclient import TestClient
 
+from app.domain.entities.user import User
+from app.infrastructure.config.settings import get_settings
+from app.infrastructure.persistence.database import SessionLocal
+from app.infrastructure.persistence.repositories.sqlalchemy_user_repository import (
+    SQLAlchemyUserRepository,
+)
+from app.infrastructure.security.bcrypt_password_hasher import BcryptPasswordHasher
+from app.infrastructure.security.jwt_token_service import JWTTokenService
+
 
 @pytest.fixture
-def auth_headers(client: TestClient) -> dict[str, str]:
-    # Register and login to get valid bearer token
-    reg_payload = {
-        "email": "approver@example.com",
-        "password": "Password123!",
-        "full_name": "Approver User",
-    }
-    client.post("/api/v1/auth/register", json=reg_payload)
-    login_resp = client.post(
-        "/api/v1/auth/login",
-        json={"email": "approver@example.com", "password": "Password123!"},
-    )
-    token = login_resp.json()["access_token"]
-    return {"Authorization": f"Bearer {token}"}
+async def auth_headers(client: TestClient) -> dict[str, str]:
+    settings = get_settings()
+    session = SessionLocal()
+    try:
+        repo = SQLAlchemyUserRepository(session)
+        user = User(
+            id=__import__("uuid").uuid4(),
+            email="approver@example.com",
+            hashed_password=BcryptPasswordHasher(rounds=4).hash("Password123!"),
+            is_active=True,
+            created_at=__import__("datetime").datetime.now(tz=__import__("datetime").UTC),
+            role="operator",
+            tenant_id="test-tenant",
+        )
+        saved = await repo.save(user)
+        token = JWTTokenService(
+            secret_key=settings.jwt_secret_key,
+            algorithm=settings.jwt_algorithm,
+            expire_minutes=settings.jwt_access_token_expire_minutes,
+            clock_skew_seconds=settings.jwt_clock_skew_seconds,
+        ).create_access_token(user_id=saved.id, email=saved.email)
+        session.commit()
+        return {"Authorization": f"Bearer {token}"}
+    finally:
+        session.close()
 
 
 def test_list_pending_unauthorized(client: TestClient) -> None:

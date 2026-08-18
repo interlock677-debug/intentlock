@@ -8,7 +8,6 @@ Covers:
 
 from __future__ import annotations
 
-import time
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -19,9 +18,9 @@ from app.infrastructure.redis.client import RedisClient, RedisUnavailableError
 from app.infrastructure.redis.rate_limiter import RedisRateLimiter
 from app.presentation.api.middleware.rate_limit import (
     RateLimitMiddleware,
+    _get_client_ip,
     reset_rate_limits,
 )
-
 
 # --------------------------------------------------------------------------- #
 # RedisRateLimiter — basic counting
@@ -360,3 +359,142 @@ def test_middleware_redis_client_isolation() -> None:
         redis_client.incr_or_raise.return_value = 1
         resp2 = client.get("/api/v1/auth/login", headers={"X-Forwarded-For": "2.2.2.2"})
         assert resp2.status_code == 200
+
+
+def test_middleware_x_forwarded_for_with_trusted_proxy() -> None:
+    """When behind a trusted proxy, use the rightmost untrusted X-Forwarded-For IP."""
+    app = _make_app()
+    redis_client = _mock_redis_client()
+    redis_client.available = True
+
+    app.add_middleware(RateLimitMiddleware, redis_client=redis_client)
+    reset_rate_limits()
+
+    client = TestClient(app)
+    with patch("app.presentation.api.middleware.rate_limit.get_settings") as mock_settings:
+        mock_settings.return_value.rate_limit_login_per_minute = 1
+        mock_settings.return_value.trusted_proxies = ["testclient"]
+
+        # Request from trusted proxy with X-Forwarded-For chain.
+        redis_client.incr_or_raise.return_value = 1
+        resp = client.get(
+            "/api/v1/auth/login",
+            headers={"X-Forwarded-For": "1.1.1.1, testclient"},
+        )
+        assert resp.status_code == 200
+
+        # Second request from same untrusted IP should be rate limited.
+        redis_client.incr_or_raise.return_value = 2
+        resp2 = client.get(
+            "/api/v1/auth/login",
+            headers={"X-Forwarded-For": "1.1.1.1, testclient"},
+        )
+        assert resp2.status_code == 429
+
+
+def test_middleware_x_forwarded_for_without_trusted_proxy() -> None:
+    """Without trusted proxies, X-Forwarded-For is ignored and direct IP is used."""
+    app = _make_app()
+    app.add_middleware(RateLimitMiddleware)
+    reset_rate_limits()
+
+    client = TestClient(app)
+    with patch("app.presentation.api.middleware.rate_limit.get_settings") as mock_settings:
+        mock_settings.return_value.rate_limit_login_per_minute = 1
+        mock_settings.return_value.trusted_proxies = []
+
+        # First request succeeds.
+        resp = client.get("/api/v1/auth/login")
+        assert resp.status_code == 200
+
+        # Second request from same direct IP is rate limited, even with X-Forwarded-For.
+        resp2 = client.get(
+            "/api/v1/auth/login", headers={"X-Forwarded-For": "2.2.2.2"}
+        )
+        assert resp2.status_code == 429
+
+
+def test_middleware_x_forwarded_for_all_trusted_falls_back_to_direct() -> None:
+    """When all X-Forwarded-For IPs are trusted, fall back to direct client IP."""
+    app = _make_app()
+    app.add_middleware(RateLimitMiddleware)
+    reset_rate_limits()
+
+    client = TestClient(app)
+    with patch("app.presentation.api.middleware.rate_limit.get_settings") as mock_settings:
+        mock_settings.return_value.rate_limit_login_per_minute = 1
+        mock_settings.return_value.trusted_proxies = ["testclient"]
+
+        # First request succeeds.
+        resp = client.get(
+            "/api/v1/auth/login",
+            headers={"X-Forwarded-For": "testclient, testclient"},
+        )
+        assert resp.status_code == 200
+
+        # Second request from same direct IP is rate limited.
+        resp2 = client.get(
+            "/api/v1/auth/login",
+            headers={"X-Forwarded-For": "testclient, testclient"},
+        )
+        assert resp2.status_code == 429
+
+
+def test_get_client_ip_uses_x_forwarded_for_with_trusted_proxy() -> None:
+    from starlette.requests import Request
+
+    with patch("app.presentation.api.middleware.rate_limit.get_settings") as mock_settings:
+        mock_settings.return_value.trusted_proxies = ["10.0.0.1"]
+        request = Request(
+            {
+                "type": "http",
+                "client": ("10.0.0.1", 1234),
+                "headers": [[b"x-forwarded-for", b"1.1.1.1, 10.0.0.1"]],
+            }
+        )
+        assert _get_client_ip(request) == "1.1.1.1"
+
+
+def test_get_client_ip_ignores_x_forwarded_for_without_trusted_proxy() -> None:
+    from starlette.requests import Request
+
+    with patch("app.presentation.api.middleware.rate_limit.get_settings") as mock_settings:
+        mock_settings.return_value.trusted_proxies = []
+        request = Request(
+            {
+                "type": "http",
+                "client": ("2.2.2.2", 1234),
+                "headers": [[b"x-forwarded-for", b"1.1.1.1"]],
+            }
+        )
+        assert _get_client_ip(request) == "2.2.2.2"
+
+
+def test_get_client_ip_all_trusted_falls_back_to_client() -> None:
+    from starlette.requests import Request
+
+    with patch("app.presentation.api.middleware.rate_limit.get_settings") as mock_settings:
+        mock_settings.return_value.trusted_proxies = ["10.0.0.1"]
+        request = Request(
+            {
+                "type": "http",
+                "client": ("10.0.0.1", 1234),
+                "headers": [[b"x-forwarded-for", b"10.0.0.1"]],
+            }
+        )
+        assert _get_client_ip(request) == "10.0.0.1"
+
+
+def test_get_client_ip_no_x_forwarded_for_falls_back_to_client() -> None:
+    from starlette.requests import Request
+
+    with patch("app.presentation.api.middleware.rate_limit.get_settings") as mock_settings:
+        mock_settings.return_value.trusted_proxies = ["10.0.0.1"]
+        request = Request(
+            {
+                "type": "http",
+                "client": ("10.0.0.1", 1234),
+                "headers": [],
+            }
+        )
+        assert _get_client_ip(request) == "10.0.0.1"

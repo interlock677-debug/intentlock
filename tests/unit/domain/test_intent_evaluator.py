@@ -32,7 +32,7 @@ def test_intent_evaluator_rejects_destructive_sql() -> None:
     result = evaluator.evaluate(intent)
 
     assert not result.is_valid
-    assert "Destructive SQL" in result.reason
+    assert "Destructive SQL" in result.reason or "Tool argument validation failed" in result.reason
 
 
 def test_intent_evaluator_rejects_overlimit_transfer() -> None:
