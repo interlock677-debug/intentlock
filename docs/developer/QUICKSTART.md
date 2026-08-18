@@ -21,7 +21,7 @@ pip install intentlock
 ## Option B: Clone and install editable
 
 ```bash
-git clone https://github.com/your-org/intentlock.git
+git clone https://github.com/interlock677-debug/intentlock.git
 cd intentlock
 
 python -m venv .venv

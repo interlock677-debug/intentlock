@@ -1,6 +1,8 @@
-# IntentLock 4.0
+# IntentLock
 
-**Proof-of-intent authorization for AI agents.** IntentLock evaluates a proposed tool action, returns a short-lived Ed25519 execution token for permitted actions, and consumes that token exactly once.
+**Security and authorization control plane for AI agents.**
+
+IntentLock evaluates a proposed tool action before it executes, returns a short-lived Ed25519 execution token for permitted actions, and consumes that token exactly once. This stops prompt-injection hijacks, unauthorized data access, destructive operations, and compliance violations before they reach production systems.
 
 > **Tiers:** Free | Pro ($49/seat/mo) | Business ($199/seat/mo) | Enterprise (custom)  
 > See [`docs/business/PRICING.md`](docs/business/PRICING.md) for details.
@@ -11,75 +13,69 @@
 ![Tests](https://img.shields.io/badge/tests-760%20passing-brightgreen)
 ![Coverage](https://img.shields.io/badge/coverage-99.92%25-ff69b4)
 
-## What is implemented
+## The problem
 
-- Email/password registration and bearer-token authentication.
-- HS256 access tokens with `iat`, `nbf`, `exp`, `jti`, token-type validation, and configurable clock-skew tolerance.
-- Intent evaluation for destructive SQL, selected shell/polyglot patterns, policy-file matches, and prompt-based transfer limits.
-- One-second (configurable) Ed25519 execution tokens with strict expiration and nonce replay protection.
-- Composite nonce store (local memory + Redis). In production Redis is required; if Redis is unavailable, execution-token consumption fails closed.
-- Authenticated HITL queue endpoints with database-backed durability and role-based approver authorization, in-memory rate limiting, correlation IDs, JSONL audit events, CORS, and response security headers.
-- Authenticated intent evaluation endpoints (`/intent/verify`, `/intent/execute`) requiring bearer-token authentication via `CurrentUser`.
-- SQLite for local development and PostgreSQL for production. Alembic owns the `0001_initial_schema` and `0002_add_user_role` migrations.
-- Python SDK and LangChain callable wrapper. SDK gateway URLs must be HTTP(S).
+AI agents execute tools on behalf of users. Without a control plane between intent and execution, an agent can be tricked into:
 
-## Security assumptions
+- Running destructive SQL or shell commands
+- Exfiltrating sensitive data
+- Initiating unauthorized financial transfers
+- Violating regulatory compliance rules
 
-- The intent verification and execution endpoints (`/intent/verify`, `/intent/execute`) require bearer-token authentication (`CurrentUser`). The SDK must provide a valid `auth_token`.
-- Access tokens rely on HS256 signature validation and short expiration. They have no server-side replay protection. Rotation and high-entropy secrets are required in non-development environments.
-- Execution tokens use Ed25519 signatures with atomic nonce consumption. Redis failure in production causes token consumption to fail closed.
-- Rate limiting is process-local when Redis is unavailable. It is an availability control, not a distributed security boundary.
-- The SDK validates gateway URLs as HTTP(S) but does not validate TLS certificates or perform network-level access control.
+Traditional IAM secures users; it does not secure agent reasoning steps. IntentLock fills that gap.
 
-## Threat model
+## Architecture
 
-### Trust boundaries
+```text
+AI Agent / Tool
+      ↓
+IntentLock Gateway
+      ↓
+Policy Evaluation
+      ↓
+Authorization
+      ↓
+Tool Security
+      ↓
+Human Approval (optional)
+      ↓
+Execution
+      ↓
+Audit Trail
+```
 
-1. **Agent → Gateway**: Intent verification and execution endpoints (`/intent/verify`, `/intent/execute`) require bearer-token authentication. The SDK must present a valid access token.
-2. **User → Gateway**: Authentication endpoints (`/auth/register`, `/auth/login`) and HITL approval endpoints (`/approval/*`) require bearer-token authentication.
-3. **Gateway → Redis**: Replay protection relies on atomic nonce consumption. Redis failure must fail closed in production.
-4. **Gateway → Database**: User persistence, approval requests, audit events, execution token records.
-5. **Gateway → External LLM/Tools**: The SDK invokes the gateway before calling protected tools; the gateway does not directly execute external actions.
+The gateway sits between the agent and the tools it calls. Every tool action is evaluated for intent, policy compliance, and security risk before an Ed25519 execution token is issued.
 
-### Attack surfaces
+## Key capabilities
 
-- Bearer-authenticated intent endpoints (`/intent/verify`, `/intent/execute`) requiring valid access tokens
-- JWT access token validation
-- Execution token signature verification and nonce consumption
-- Policy engine pattern matching
-- Rate limiting (proxy-aware IP extraction)
-- Redis authentication and failure behavior
-- Database connection and transaction handling
-- Key material storage and rotation
-- Audit log integrity
-- Request size and malformed input handling
+- **Proof-of-intent evaluation** — regex, sqlglot parser, URL/scheme/path validation, and policy-as-code
+- **Short-lived execution tokens** — Ed25519-signed JWTs consumed exactly once with atomic nonce replay protection
+- **Policy engine with rollback** — YAML-configured, versioned rules with precedence and rollback
+- **Human-in-the-loop queue** — database-backed durable approvals with RBAC
+- **Tamper-evident audit log** — JSONL events chained with SHA-256 hashes and HMAC-signed compliance exports
+- **Python SDK + LangChain wrapper** — drop-in integration with `guard_tool` decorator
 
-## Configuration
+## Demo
 
-Copy `.env.example` to `.env` for development. Important variables:
+Run the included demonstration to see IntentLock in action:
 
-| Variable | Purpose |
-| --- | --- |
-| `APP_ENV` | `development`, `staging`, `production`, or `test` |
-| `DEBUG` | Enables `/docs`, `/redoc`, and `/openapi.json` only when true |
-| `DATABASE_URL` | SQLite locally; PostgreSQL is required when `APP_ENV=production` |
-| `JWT_SECRET_KEY` | At least 32 characters; the development default is rejected outside development |
-| `JWT_ACCESS_TOKEN_EXPIRE_MINUTES` / `JWT_CLOCK_SKEW_SECONDS` | Access-token lifetime and validation tolerance |
-| `EXECUTION_TOKEN_TTL_SECONDS` | Execution-token lifetime, 1–60 seconds |
-| `EXECUTION_KEY_PATH` | Optional PEM path for a stable Ed25519 execution key |
-| `REDIS_URL` / `REDIS_ENABLED` | Distributed replay protection; both are required in production |
-| `CORS_ORIGINS` | Comma-separated allowed browser origins |
-| `RATE_LIMIT_*` | Per-minute login, registration, and intent limits |
-| `HITL_TTL_SECONDS` | Database-backed approval request lifetime |
-| `VELOCITY_*` | Thresholds for the reusable velocity-tracker component |
+```bash
+python examples/demo_agent_defense.py
+```
 
-Never commit `.env`, private PEM keys, database backups, or audit logs. Use a unique high-entropy `JWT_SECRET_KEY` in every non-development environment.
+The demo shows three scenarios:
+
+1. **Legitimate request** — a safe SQL query is permitted
+2. **Prompt injection attack** — a `DROP TABLE` command is blocked
+3. **Unauthorized transfer** — a transfer exceeding the user's stated limit is blocked
+
+Output includes audit trail verification from `logs/audit_trail.jsonl`.
 
 ## Quickstart
 
 ```bash
 # 1. Clone and enter the repository
-git clone https://github.com/your-org/intentlock.git
+git clone https://github.com/interlock677-debug/intentlock.git
 cd intentlock
 
 # 2. Create a virtual environment
@@ -104,7 +100,15 @@ alembic check
 alembic current
 ```
 
-## Authentication example
+## Installation
+
+```bash
+pip install intentlock
+```
+
+## Example usage
+
+### Authentication
 
 ```python
 import httpx
@@ -119,7 +123,7 @@ response = httpx.post(
 token = response.json()["access_token"]
 ```
 
-## Authorization example
+### Authorization
 
 ```python
 from sdk.intentlock import IntentLockGuard, SecurityError
@@ -142,7 +146,7 @@ except SecurityError as exc:
     print(f"IntentLock denied execution: {exc}")
 ```
 
-## Policy example
+### Policy example
 
 Blocked patterns are defined in `config/policies.yaml`:
 
@@ -167,7 +171,7 @@ User: "Send $5000 to Alice"
 Agent: transfer(to="Alice", amount=5000) # DENIED — exceeds prompt limit
 ```
 
-## HITL workflow example
+### HITL workflow
 
 ```python
 from sdk.intentlock import IntentLockGuard
@@ -186,17 +190,34 @@ client.approve_request("request-uuid-here")
 client.reject_request("request-uuid-here")
 ```
 
-## Error handling
+## Documentation
 
-| Error | Cause | Resolution |
-| --- | --- | --- |
-| `SecurityError: IntentLock denied execution` | Policy blocked the action, SQL injection detected, or token validation failed | Review the action, adjust policy, or obtain approval |
-| `HTTP 403 Forbidden` | Action violates intent evaluation or policy rules | Check the `detail` field for the specific rejection reason |
-| `HTTP 401 Unauthorized` | Invalid or expired execution token | Request a new execution token |
-| `HTTP 404 Not Found` | Approval request does not exist | Verify the request ID |
-| `HTTP 422 Unprocessable Entity` | Malformed request DTO | Check request body against the OpenAPI schema |
+- [Developer Quickstart](docs/developer/QUICKSTART.md) — 5-minute setup guide
+- [Developer Examples](docs/developer/EXAMPLES.md) — multi-agent, LangChain, HITL, Docker, K8s
+- [Developer Onboarding](docs/developer/ONBOARDING.md) — week-one checklist for new engineers
+- [SDK Reference](sdk/README.md) — Python SDK and LangChain wrapper docs
+- [Architecture](docs/architecture/ARCHITECTURE.md) — layers, trust boundaries, request flow, attack paths
+- [Security Assurance Report](docs/security/SECURITY_ASSURANCE_REPORT.md) — controls, test evidence, findings, remediation
+- [Security Hardening Roadmap](docs/security/SECURITY_HARDENING_ROADMAP.md) — P0/P1/P2/P3 security roadmap
+- [Final Independent Audit](docs/security/FINAL_INDEPENDENT_AUDIT.md) — adversarial test results and evidence
+- [Product Positioning](docs/business/PRODUCT_POSITIONING.md) — value proposition, target market, competitive differentiation
+- [Pricing](docs/business/PRICING.md) — Free / Pro / Business / Enterprise tier details
+- [Target Market](docs/business/TARGET_MARKET.md) — buyer personas, use cases, market trends
+- [Enterprise Deployment](docs/commercial/ENTERPRISE_DEPLOYMENT.md) — multi-tenant, multi-region, air-gapped, K8s, DR, compliance
 
-## Security boundaries
+## Security
+
+IntentLock implements defense-in-depth controls across the authorization path. For a complete review, see [`docs/security/SECURITY_ASSURANCE_REPORT.md`](docs/security/SECURITY_ASSURANCE_REPORT.md).
+
+### Security assumptions
+
+- The intent verification and execution endpoints (`/intent/verify`, `/intent/execute`) require bearer-token authentication (`CurrentUser`). The SDK must provide a valid `auth_token`.
+- Access tokens rely on HS256 signature validation and short expiration. They have no server-side replay protection. Rotation and high-entropy secrets are required in non-development environments.
+- Execution tokens use Ed25519 signatures with atomic nonce consumption. Redis failure in production causes token consumption to fail closed.
+- Rate limiting is process-local when Redis is unavailable. It is an availability control, not a distributed security boundary.
+- The SDK validates gateway URLs as HTTP(S) but does not validate TLS certificates or perform network-level access control.
+
+### Security boundaries
 
 - **Bearer-authenticated intent endpoints**: `/intent/verify` and `/intent/execute` require a valid bearer token (`CurrentUser`). The SDK must provide an `auth_token`.
 - **Short-lived tokens**: Execution tokens expire in 1–60 seconds. Replay is prevented by atomic nonce consumption.
@@ -236,6 +257,73 @@ REDIS_PASSWORD=<secure-random-value>
 JWT_SECRET_KEY=<secure-random-value-at-least-32-chars>
 ```
 
+## Security & Trust
+
+This section presents security evidence from the existing repository. It does not claim certification or compliance.
+
+### Testing evidence
+
+| Check | Result |
+|-------|--------|
+| Automated tests | 760 passed, 5 skipped, 0 failed |
+| Statement coverage | 99.92% |
+| Branch coverage | 99.59% |
+| Static analysis (Ruff) | 0 errors |
+| Type checking (MyPy) | 0 issues |
+| Security scanner (Bandit) | 0 High/Medium issues |
+| Dependency audit (pip-audit) | 0 known vulnerabilities |
+| Adversarial tests | 88 passed |
+| SBOM | Generated (156 components) |
+
+### What the evidence shows
+
+- **Automated security testing** — adversarial tests cover JWT forgery, replay attacks, SQL injection, SSRF, path traversal, and prompt injection
+- **Dependency auditing** — pip-audit runs in CI; SBOM is generated for supply-chain transparency
+- **Static analysis** — Ruff, MyPy, Bandit, and Semgrep are configured in CI
+- **Threat model** — documented in [`docs/architecture/ARCHITECTURE.md`](docs/architecture/ARCHITECTURE.md) and [`docs/security/SECURITY_ASSURANCE_REPORT.md`](docs/security/SECURITY_ASSURANCE_REPORT.md)
+- **Security documentation** — assurance report, hardening roadmap, and independent audit are in [`docs/security/`](docs/security/)
+
+### What is not claimed
+
+- This is **not** independent penetration testing by a qualified security firm
+- This is **not** a SOC 2, HIPAA, PCI-DSS, or any regulatory compliance certification
+- This is **not** a guarantee of security outcomes
+- Testing evidence does not equal certification
+
+## Project status
+
+IntentLock V4 is an actively developed security and authorization platform for AI-agent workloads. The codebase is functionally complete, tested, and hardened with documented architectural limitations.
+
+### Current state
+
+- **Version:** 4.0.0
+- **Python:** 3.11+
+- **Framework:** FastAPI 0.115+
+- **Tests:** 760 passing with 99.92% statement coverage
+- **Database:** SQLite (development), PostgreSQL (production)
+- **Cache:** Redis for distributed replay protection and rate limiting
+
+### Known limitations
+
+- Access tokens are stateless JWTs with no server-side replay protection (execution tokens have nonce-based replay protection)
+- KMS/HSM integration is defined as an interface placeholder; production deployments must integrate external key management
+- Docker image hardening is configured but runtime verification is pending CI execution
+- No independent security certification has been obtained
+- No regulatory compliance assessment has been performed
+- Git-tracked runtime data (`intentlock.db`, `logs/audit_trail.jsonl`) is documented for future history cleanup
+
+## Operations
+
+Audit events are written as JSONL to `logs/audit_trail.jsonl` and include timestamps, event type, and correlation ID. Preserve those logs according to the organization's retention policy, alert on repeated policy/replay failures, rotate JWT and execution-signing material through a controlled deployment, and restore PostgreSQL/Redis from tested backups.
+
+On an incident, restrict API ingress, rotate affected secrets, retain audit logs, investigate correlation IDs, and invalidate/redeploy signing material as appropriate. Tokens are intentionally short lived; replay attempts are denied.
+
+## Future extension points
+
+`KMSKeyManager` is an interface-shaped placeholder, not a configured KMS integration. Provider-backed signing, automatic key rotation, distributed rate limiting, and downstream-resource authorization are future deployment capabilities, not V4 runtime features.
+
+V4.0 has known limitations documented in `docs/security/SECURITY_ASSURANCE_REPORT.md`. Future security patches, dependency updates, infrastructure changes, and new capabilities remain normal post-release maintenance.
+
 ## Verification
 
 ```bash
@@ -250,18 +338,6 @@ alembic current
 ```
 
 `--no-cov` prevents pytest-cov's configured inner collector from conflicting with the outer coverage command.
-
-## Operations
-
-Audit events are written as JSONL to `logs/audit_trail.jsonl` and include timestamps, event type, and correlation ID. Preserve those logs according to the organization's retention policy, alert on repeated policy/replay failures, rotate JWT and execution-signing material through a controlled deployment, and restore PostgreSQL/Redis from tested backups.
-
-On an incident, restrict API ingress, rotate affected secrets, retain audit logs, investigate correlation IDs, and invalidate/redeploy signing material as appropriate. Tokens are intentionally short lived; replay attempts are denied.
-
-## Future extension points
-
-`KMSKeyManager` is an interface-shaped placeholder, not a configured KMS integration. Provider-backed signing, automatic key rotation, distributed rate limiting, and downstream-resource authorization are future deployment capabilities, not V4 runtime features.
-
-V4.0 has known limitations documented in `docs/security/SECURITY_ASSURANCE_REPORT.md`. Future security patches, dependency updates, infrastructure changes, and new capabilities remain normal post-release maintenance.
 
 ## Commercial
 

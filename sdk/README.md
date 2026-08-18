@@ -11,7 +11,7 @@ pip install intentlock
 For development:
 
 ```bash
-git clone https://github.com/your-org/intentlock.git
+git clone https://github.com/interlock677-debug/intentlock.git
 cd intentlock
 pip install -e ".[dev,security]"
 ```

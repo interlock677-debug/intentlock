@@ -1,6 +1,6 @@
 # IntentLock Documentation
 
-## Getting started
+## Getting Started
 
 - [README](../README.md) — project overview, quickstart, API reference
 - [Developer Quickstart](developer/QUICKSTART.md) — 5-minute setup guide
@@ -8,9 +8,13 @@
 - [Developer Onboarding](developer/ONBOARDING.md) — week-one checklist for new engineers
 - [SDK Reference](sdk/README.md) — Python SDK and LangChain wrapper docs
 
-## Architecture and security
+## Architecture
 
 - [Architecture](architecture/ARCHITECTURE.md) — layers, trust boundaries, request flow, attack paths
+- [Threat Model](architecture/ARCHITECTURE.md#trust-boundaries) — trust boundaries and attack surfaces
+
+## Security
+
 - [Security Assurance Report](security/SECURITY_ASSURANCE_REPORT.md) — controls, test evidence, findings, remediation
 - [Security Hardening Roadmap](security/SECURITY_HARDENING_ROADMAP.md) — P0/P1/P2/P3 security roadmap
 - [Final Independent Audit](security/FINAL_INDEPENDENT_AUDIT.md) — adversarial test results and evidence
@@ -21,7 +25,7 @@
 - [Final Status](operations/FINAL_STATUS.md) — security hardening summary and release determination
 - [Git History Remediation](operations/GIT_HISTORY_REMEDIATION.md) — procedure for cleaning git history
 
-## Business and pricing
+## Business
 
 - [Product Positioning](business/PRODUCT_POSITIONING.md) — value proposition, target market, competitive differentiation
 - [Pricing](business/PRICING.md) — Free / Pro / Business / Enterprise tier details

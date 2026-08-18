@@ -55,7 +55,7 @@ All tiers include the core gateway, Python SDK, and security updates. Business a
 
 - **Docs:** `docs/developer/QUICKSTART.md`
 - **SDK:** `pip install intentlock`
-- **GitHub:** `https://github.com/your-org/intentlock`
+- **GitHub:** `https://github.com/interlock677-debug/intentlock`
 - **Pricing:** `docs/business/PRICING.md`
 
 ## About IntentLock
