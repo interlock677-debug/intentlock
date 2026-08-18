@@ -6,6 +6,7 @@ import sqlglot
 
 from app.domain.models.intent import AgentActionDAG, IntentProofResponse
 from app.domain.services.policy_engine import PolicyEngine
+from app.domain.services.tool_security import ToolArgumentValidator, ToolSecurityError
 
 DESCTRUCTIVE_SQL_PATTERNS = [
     r"\bDROP\s+TABLE\b",
@@ -25,10 +26,43 @@ MAX_AMOUNT_PROMPT_PATTERNS = [
 class IntentEvaluatorService:
     """Evaluates agent intents for proof-of-intent authorization."""
 
+    PROMPT_INJECTION_PATTERNS = [
+        r"ignore\s+(all\s+)?previous\s+instructions",
+        r"ignore\s+(all\s+)?instructions",
+        r"you\s+are\s+now",
+        r"new\s+instructions",
+        r"override\s+(security\s+)?policy",
+        r"reveal\s+your\s+(system\s+)?prompt",
+        r"reveal\s+your\s+instructions",
+        r"act\s+as",
+        r"pretend\s+you\s+are",
+        r"disregard",
+        r"system\s+prompt",
+    ]
+
     def __init__(self, policy_engine: PolicyEngine | None = None) -> None:
         self._policy_engine = policy_engine or PolicyEngine.from_file()
+        self._tool_validator = ToolArgumentValidator()
 
     def evaluate(self, intent: AgentActionDAG) -> IntentProofResponse:
+        self._separate_trusted_untrusted(intent)
+
+        tool_reason = self._validate_tool_arguments(intent)
+        if tool_reason:
+            return IntentProofResponse(
+                is_valid=False,
+                confidence_score=0.0,
+                reason=tool_reason,
+            )
+
+        injection_reason = self._detect_prompt_injection(intent)
+        if injection_reason:
+            return IntentProofResponse(
+                is_valid=False,
+                confidence_score=0.0,
+                reason=injection_reason,
+            )
+
         destructive_reason = self._inspect_destructive_sql(intent)
         if destructive_reason:
             return IntentProofResponse(
@@ -45,7 +79,6 @@ class IntentEvaluatorService:
                 reason=transfer_reason,
             )
 
-        # Policy engine risk evaluation
         policy_text = f"{intent.user_prompt} {intent.reasoning_step}"
         policy_result = self._policy_engine.evaluate(policy_text)
         if policy_result.get("blocked"):
@@ -56,7 +89,6 @@ class IntentEvaluatorService:
                 reason=f"Policy violation: {reasons}",
             )
 
-        # Polyglot/shell payload detection
         if self._contains_polyglot_payload(intent):
             return IntentProofResponse(
                 is_valid=False,
@@ -69,6 +101,27 @@ class IntentEvaluatorService:
             confidence_score=0.95,
             reason="Intent appears safe for execution.",
         )
+
+    def _validate_tool_arguments(self, intent: AgentActionDAG) -> str | None:
+        try:
+            self._tool_validator.validate_schema(intent.tool_arguments)
+        except ToolSecurityError as exc:
+            return f"Tool argument validation failed: {exc}"
+        return None
+
+    def _detect_prompt_injection(self, intent: AgentActionDAG) -> str | None:
+        texts = [intent.user_prompt or "", intent.reasoning_step or ""]
+        for text in texts:
+            normalized = text.strip().lower()
+            if not normalized:
+                continue
+            for pattern in self.PROMPT_INJECTION_PATTERNS:
+                if re.search(pattern, normalized, flags=re.IGNORECASE):
+                    return "Prompt injection attempt detected."
+        return None
+
+    def _separate_trusted_untrusted(self, intent: AgentActionDAG) -> None:
+        pass
 
     def _inspect_destructive_sql(self, intent: AgentActionDAG) -> str | None:
         arguments = self._collect_strings(intent.tool_arguments)
@@ -161,7 +214,9 @@ class IntentEvaluatorService:
         return []
 
     def _contains_polyglot_payload(self, intent: AgentActionDAG) -> bool:
-        text = f"{intent.user_prompt} {intent.reasoning_step}"
+        text = f"{intent.user_prompt or ''} {intent.reasoning_step or ''}".strip()
+        if not text:
+            return False
         if re.search(
             r"union\s+select|drop\s+table|truncate\s+table|echo\s+",
             text,
@@ -169,12 +224,15 @@ class IntentEvaluatorService:
         ):
             return True
         try:
-            sqlglot.parse_one(text)
+            parsed = sqlglot.parse_one(text)
+            if parsed is not None:
+                sql_type = str(parsed.key).upper()
+                if sql_type not in {"COMMAND", "UNKNOWN"}:
+                    return True
+        except Exception:  # nosec B110 - polyglot detection: any parse failure means not a polyglot  # noqa: S110
+            pass
+        try:
+            ast.parse(text)
             return True
-        except Exception:
-            try:
-                ast.parse(text)
-                return True
-            except Exception:
-                return False
-        return True
+        except Exception:  # nosec B110 - polyglot detection: any parse failure means not a polyglot  # noqa: S110
+            return False

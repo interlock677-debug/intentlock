@@ -21,11 +21,19 @@ from app.infrastructure.security.memory_nonce_store import MemoryNonceStore
 def get_key_manager() -> KeyManager:
     """Return the appropriate key manager for the environment.
 
-    Development/test use EnvKeyManager. Production deployments should
-    configure a KMS-backed implementation. Results are cached globally
-    because the key material must remain stable across requests.
+    When ``key_dir`` is configured, ``VersionedKeyManager`` is used for
+    persistent versioned Ed25519 keys with rotation support.  Otherwise,
+    ``EnvKeyManager`` provides ephemeral or file-backed keys suitable for
+    development and test.
     """
     settings = get_settings()
+    if settings.key_dir:
+        from app.infrastructure.security.versioned_key_manager import VersionedKeyManager
+
+        return VersionedKeyManager(
+            key_dir=settings.key_dir,
+            jwt_secret=settings.jwt_secret_key,
+        )
     return EnvKeyManager(
         jwt_secret=settings.jwt_secret_key,
         execution_key_path=settings.execution_key_path,

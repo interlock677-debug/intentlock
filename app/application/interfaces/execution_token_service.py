@@ -12,6 +12,7 @@ class ExecutionTokenService(ABC):
         agent_id: str,
         tool: str,
         ttl_seconds: int,
+        subject: str | None = None,
     ) -> str: ...
 
     @abstractmethod

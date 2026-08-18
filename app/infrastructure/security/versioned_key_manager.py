@@ -51,7 +51,13 @@ class VersionedKeyManager(KeyManager):
         jwt_secret: str | None = None,
         hsm_provider: HSMKeyProvider | None = None,
     ) -> None:
-        self._key_dir: Path | None = Path(key_dir) if key_dir else None
+        if key_dir is not None:
+            if ".." in Path(key_dir).parts:
+                msg = f"Invalid key directory path: {key_dir}"
+                raise ValueError(msg)
+            self._key_dir: Path | None = Path(key_dir).resolve()
+        else:
+            self._key_dir = None
         self._jwt_secret = jwt_secret
         self._hsm_provider = hsm_provider
         self._keys: dict[str, Ed25519PrivateKey] = {}

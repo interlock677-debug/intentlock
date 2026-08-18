@@ -123,3 +123,20 @@ async def get_current_user(
 
 
 CurrentUser = Annotated[UserResponse, Depends(get_current_user)]
+
+
+def require_hitl_approver(
+    current_user: CurrentUser,
+    settings: Annotated[Settings, Depends(get_app_settings)],
+) -> UserResponse:
+    """Ensure the authenticated user holds an HITL approver role.
+
+    Returns the current user when authorized.
+    Raises 403 when the user's role is not in the configured approver set.
+    """
+    if current_user.role not in settings.hitl_approver_roles:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Insufficient permissions to approve or reject HITL requests.",
+        )
+    return current_user

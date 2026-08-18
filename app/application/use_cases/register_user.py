@@ -29,12 +29,15 @@ class RegisterUserUseCase:
         if await self._user_repository.exists_by_email(email):
             raise DuplicateEmailError(f"Email already registered: {email}")
 
+        tenant_id = getattr(request, "tenant_id", None)
         user = User(
             id=uuid4(),
             email=email,
             hashed_password=self._password_hasher.hash(request.password),
             is_active=True,
             created_at=datetime.now(tz=UTC),
+            role="viewer",
+            tenant_id=tenant_id,
         )
         saved_user = await self._user_repository.save(user)
 
@@ -48,5 +51,7 @@ class RegisterUserUseCase:
                 id=saved_user.id,
                 email=saved_user.email,
                 is_active=saved_user.is_active,
+                role=saved_user.role,
+                tenant_id=saved_user.tenant_id,
             ),
         )

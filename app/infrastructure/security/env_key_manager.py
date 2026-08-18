@@ -22,6 +22,9 @@ class EnvKeyManager(KeyManager):
         execution_key_path: str | None = None,
     ) -> None:
         self._jwt_secret = jwt_secret
+        if execution_key_path is not None and ".." in Path(execution_key_path).parts:
+            msg = f"Invalid execution key path: {execution_key_path}"
+            raise ValueError(msg)
         self._execution_key_path = execution_key_path
         self._private_key: Ed25519PrivateKey | None = None
 
@@ -53,9 +56,11 @@ class EnvKeyManager(KeyManager):
         raise KeyError(msg)
 
     def _load_or_create_private_key(self) -> Ed25519PrivateKey:
-        if self._execution_key_path and Path(self._execution_key_path).exists():
-            data = Path(self._execution_key_path).read_bytes()
-            return serialization.load_pem_private_key(data, password=None)  # type: ignore[return-value]
+        if self._execution_key_path:
+            path = Path(self._execution_key_path)
+            if path.exists():
+                data = path.read_bytes()
+                return serialization.load_pem_private_key(data, password=None)  # type: ignore[return-value]
 
         key = Ed25519PrivateKey.generate()
         if self._execution_key_path:

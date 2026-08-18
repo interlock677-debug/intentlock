@@ -5,7 +5,9 @@ from fastapi.responses import JSONResponse
 
 from app.domain.exceptions.domain_errors import (
     ApprovalError,
+    ApprovalRequiredError,
     AuthenticationError,
+    AuthorizationError,
     DomainError,
     ExecutionTokenError,
     PolicyViolationError,
@@ -27,6 +29,18 @@ def register_exception_handlers(app: FastAPI) -> None:
             logger.warning("Security error: %s", exc)
             return JSONResponse(
                 status_code=status.HTTP_401_UNAUTHORIZED,
+                content={"detail": str(exc)},
+            )
+        if isinstance(exc, (AuthorizationError,)):
+            logger.warning("Authorization error: %s", exc)
+            return JSONResponse(
+                status_code=status.HTTP_403_FORBIDDEN,
+                content={"detail": str(exc)},
+            )
+        if isinstance(exc, ApprovalRequiredError):
+            logger.warning("Approval required: %s", exc)
+            return JSONResponse(
+                status_code=status.HTTP_403_FORBIDDEN,
                 content={"detail": str(exc)},
             )
         if isinstance(exc, (PolicyViolationError, WebhookError)):

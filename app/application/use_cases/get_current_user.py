@@ -20,4 +20,6 @@ class GetCurrentUserUseCase:
             id=user.id,
             email=user.email,
             is_active=user.is_active,
+            role=user.role,
+            tenant_id=user.tenant_id,
         )

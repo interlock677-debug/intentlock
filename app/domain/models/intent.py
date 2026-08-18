@@ -11,6 +11,10 @@ class AgentActionDAG(BaseModel):
     reasoning_step: str
     proposed_tool: str
     tool_arguments: dict[str, Any]
+    tenant_id: str | None = None
+    service_id: str | None = None
+    action: str = "execute"
+    resource: str = ""
 
 
 class IntentProofResponse(BaseModel):
@@ -18,3 +22,4 @@ class IntentProofResponse(BaseModel):
     confidence_score: float
     reason: str
     ephemeral_token: str | None = None
+    requires_hitl: bool = False

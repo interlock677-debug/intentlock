@@ -3,7 +3,7 @@ from __future__ import annotations
 import contextlib
 from datetime import UTC, datetime, timedelta
 from typing import Any
-from uuid import uuid4
+from uuid import UUID, uuid4
 
 from sqlalchemy import delete, select
 from sqlalchemy.exc import IntegrityError
@@ -32,6 +32,8 @@ class HITLQueue:
         request_id: str | None = None,
         intent_text: str = "",
         risk_score: float = 0.0,
+        tenant_id: str | None = None,
+        user_id: UUID | None = None,
     ) -> str:
         request_key = request_id or str(uuid4())
         now = datetime.now(tz=UTC)
@@ -45,6 +47,8 @@ class HITLQueue:
                         status="pending",
                         created_at=now,
                         expires_at=now + timedelta(seconds=self._ttl_seconds),
+                        tenant_id=tenant_id,
+                        user_id=user_id,
                     )
                 )
         except IntegrityError as exc:
@@ -55,25 +59,46 @@ class HITLQueue:
             with contextlib.suppress(Exception):
                 self._redis_client.set(
                     f"hitl:{request_key}",
-                    str({"request_id": request_key, "status": "pending"}),
+                    str({"request_id": request_key, "status": "pending", "tenant_id": tenant_id}),
                     ex=self._ttl_seconds,
                 )
         return request_key
 
-    async def approve_request(self, request_id: str) -> dict[str, object]:
-        return await self._decide(request_id, "approved")
+    async def approve_request(
+        self,
+        request_id: str,
+        *,
+        decided_by: UUID | None = None,
+        tenant_id: str | None = None,
+    ) -> dict[str, object]:
+        return await self._decide(
+            request_id, "approved", decided_by=decided_by, tenant_id=tenant_id
+        )
 
-    async def reject_request(self, request_id: str) -> dict[str, object]:
-        return await self._decide(request_id, "rejected")
+    async def reject_request(
+        self,
+        request_id: str,
+        *,
+        decided_by: UUID | None = None,
+        tenant_id: str | None = None,
+    ) -> dict[str, object]:
+        return await self._decide(
+            request_id, "rejected", decided_by=decided_by, tenant_id=tenant_id
+        )
 
-    async def list_pending_requests(self) -> list[dict[str, object]]:
+    async def list_pending_requests(
+        self, *, tenant_id: str | None = None
+    ) -> list[dict[str, object]]:
         now = datetime.now(tz=UTC)
         with get_db_session() as session:
-            pending = session.scalars(
+            stmt = (
                 select(ApprovalRequestModel)
                 .where(ApprovalRequestModel.status == "pending")
                 .order_by(ApprovalRequestModel.created_at)
-            ).all()
+            )
+            if tenant_id is not None:
+                stmt = stmt.where(ApprovalRequestModel.tenant_id == tenant_id)
+            pending = session.scalars(stmt).all()
             result: list[dict[str, object]] = []
             for model in pending:
                 if self._as_utc(model.expires_at) <= now:
@@ -87,7 +112,14 @@ class HITLQueue:
         with get_db_session() as session:
             session.execute(delete(ApprovalRequestModel))
 
-    async def _decide(self, request_id: str, decision: str) -> dict[str, object]:
+    async def _decide(
+        self,
+        request_id: str,
+        decision: str,
+        *,
+        decided_by: UUID | None = None,
+        tenant_id: str | None = None,
+    ) -> dict[str, object]:
         now = datetime.now(tz=UTC)
         with get_db_session() as session:
             model = session.scalar(
@@ -104,13 +136,23 @@ class HITLQueue:
             elif model.status != "pending":
                 raise ApprovalError(f"Approval request {request_id} has already been resolved")
             else:
+                if tenant_id is not None and model.tenant_id != tenant_id:
+                    raise ApprovalError(
+                        f"Approval request {request_id} does not belong to tenant {tenant_id}"
+                    )
                 model.status = decision
                 model.decided_at = now
+                model.decided_by = decided_by
                 result = self._to_dict(model)
                 expired = False
 
         if expired:
             raise ApprovalError(f"Approval request {request_id} has expired")
+
+        if self._redis_client is not None:
+            with contextlib.suppress(Exception):
+                self._redis_client.delete(f"hitl:{request_id}")
+
         return result
 
     @staticmethod
@@ -134,4 +176,7 @@ class HITLQueue:
             "created_at": self._as_utc(model.created_at).isoformat(),
             "expires_at": self._as_utc(model.expires_at).isoformat(),
             "decided_at": self._as_utc(model.decided_at).isoformat() if model.decided_at else None,
+            "decided_by": str(model.decided_by) if model.decided_by else None,
+            "tenant_id": model.tenant_id,
+            "user_id": str(model.user_id) if model.user_id else None,
         }

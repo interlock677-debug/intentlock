@@ -44,6 +44,8 @@ class UserResponse(BaseModel):
     id: UUID
     email: EmailStr
     is_active: bool
+    role: str = "viewer"
+    tenant_id: str | None = None
 
 
 class AuthResponse(BaseModel):

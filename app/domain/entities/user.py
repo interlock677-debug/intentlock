@@ -12,3 +12,5 @@ class User:
     hashed_password: str
     is_active: bool
     created_at: datetime
+    role: str = "viewer"
+    tenant_id: str | None = None

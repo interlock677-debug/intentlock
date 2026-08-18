@@ -12,10 +12,30 @@ from app.infrastructure.logging.audit_logger import log_security_event
 from app.infrastructure.redis.client import RedisClient, RedisUnavailableError
 from app.infrastructure.redis.rate_limiter import RedisRateLimiter
 
+
+def _get_client_ip(request: Request) -> str:
+    settings = get_settings()
+    trusted_proxies = set(settings.trusted_proxies)
+    client_host = request.client.host if request.client else "unknown"
+
+    if not trusted_proxies or client_host not in trusted_proxies:
+        return client_host
+
+    x_forwarded_for = request.headers.get("X-Forwarded-For", "")
+    if x_forwarded_for:
+        ips = [ip.strip() for ip in x_forwarded_for.split(",")]
+        for ip in reversed(ips):
+            if ip not in trusted_proxies:
+                return ip
+
+    return client_host
+
+
 RATE_LIMITS = {
     "/api/v1/auth/login": "rate_limit_login_per_minute",
     "/api/v1/auth/register": "rate_limit_register_per_minute",
     "/api/v1/intent/verify": "rate_limit_intent_per_minute",
+    "/api/v1/intent/execute": "rate_limit_intent_per_minute",
 }
 
 WINDOW_SECONDS = 60
@@ -87,7 +107,7 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
             max_calls = int(getattr(settings, limit_setting, 60))
             window = WINDOW_SECONDS
 
-            remote_addr = request.client.host if request.client else "unknown"
+            remote_addr = _get_client_ip(request)
 
             redis_limiter = self._get_redis_limiter()
             if redis_limiter is not None:

@@ -50,12 +50,14 @@ class Ed25519ExecutionTokenService(ExecutionTokenService):
         agent_id: str,
         tool: str,
         ttl_seconds: int,
+        subject: str | None = None,
     ) -> str:
         now = int(time.time())
         key_id = self._key_manager.active_key_id
         header = {"alg": "EdDSA", "typ": "JWT", "kid": key_id}
         payload = {
-            "sub": agent_id,
+            "sub": subject or agent_id,
+            "agent_id": agent_id,
             "type": "execution",
             "tool": tool,
             "iat": now,

@@ -19,6 +19,10 @@ class PolicyEngine:
 
     score_threshold: float = 0.5
     blocked_patterns: list[str] = field(default_factory=list)
+    _compiled_patterns: list[re.Pattern[str]] = field(default_factory=list, repr=False)
+
+    def __post_init__(self) -> None:
+        self._compiled_patterns = [self._compile_pattern(p) for p in self.blocked_patterns]
 
     @classmethod
     def from_file(cls, path: str | Path | None = None) -> PolicyEngine:
@@ -48,20 +52,20 @@ class PolicyEngine:
         reasons: list[str] = []
         score = 0.0
 
-        for pattern in self.blocked_patterns:
-            if pattern in normalized:
+        for pattern, compiled in zip(self.blocked_patterns, self._compiled_patterns, strict=True):
+            if compiled.search(normalized):
                 score += 0.35
                 reasons.append(f"Blocked pattern matched: {pattern}")
 
-        if self._contains_zero_width(text):
+        if self._contains_zero_width(normalized):
             score += 0.35
             reasons.append("Zero-width unicode characters detected")
 
-        if self._looks_like_base64(text):
+        if self._looks_like_base64(normalized):
             score += 0.35
             reasons.append("Base64 payload detected")
 
-        if "transfer" in normalized and "$" in text:
+        if "transfer" in normalized and "$" in normalized:
             score += 0.15
             reasons.append("Financial transfer pattern detected")
 
@@ -79,11 +83,19 @@ class PolicyEngine:
         }
 
     @staticmethod
+    def _compile_pattern(pattern: str) -> re.Pattern[str]:
+        escaped = re.escape(pattern)
+        flexible = escaped.replace(r"\ ", r"\s+")
+        return re.compile(rf"(?<!\w){flexible}(?!\w)", flags=re.IGNORECASE)
+
+    @staticmethod
     def _default_policy_path() -> Path:
         return Path(__file__).resolve().parents[2] / "config" / "policies.yaml"
 
     @staticmethod
     def _contains_zero_width(text: str) -> bool:
+        if not text:
+            return False
         return any(char in text for char in {"\u200b", "\u200c", "\u200d", "\ufeff"})
 
     @staticmethod

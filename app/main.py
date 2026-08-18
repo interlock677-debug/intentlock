@@ -9,6 +9,7 @@ from app.infrastructure.persistence.database import init_db
 from app.presentation.api.middleware.correlation import CorrelationIdMiddleware
 from app.presentation.api.middleware.exception_handler import register_exception_handlers
 from app.presentation.api.middleware.rate_limit import RateLimitMiddleware
+from app.presentation.api.middleware.request_size_limit import RequestSizeLimitMiddleware
 from app.presentation.api.middleware.security_headers import SecurityHeadersMiddleware
 from app.presentation.api.v1.router import api_v1_router
 
@@ -40,6 +41,9 @@ def create_app() -> FastAPI:
         allow_headers=["Authorization", "Content-Type", "X-Correlation-ID"],
     )
     application.add_middleware(SecurityHeadersMiddleware)
+    application.add_middleware(
+        RequestSizeLimitMiddleware, max_bytes=settings.request_max_body_bytes
+    )
     application.add_middleware(RateLimitMiddleware)
     application.add_middleware(CorrelationIdMiddleware)
 
