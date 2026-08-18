@@ -14,10 +14,20 @@ class IntentLockLangChainTool:
         self,
         tool: Callable[..., Any],
         base_url: str = "http://127.0.0.1:8000/api/v1/intent/verify",
+        auth_token: str | None = None,
     ) -> None:
         self._tool = tool
         self.base_url = base_url
+        self._auth_token = auth_token
         self.tool_name = self._resolve_tool_name(tool)
+
+    def _auth_headers(self) -> dict[str, str]:
+        if self._auth_token:
+            return {
+                "Authorization": f"Bearer {self._auth_token}",
+                "Content-Type": "application/json",
+            }
+        return {"Content-Type": "application/json"}
 
     @staticmethod
     def _resolve_tool_name(tool: Callable[..., Any]) -> str:
@@ -47,15 +57,15 @@ class IntentLockLangChainTool:
         }
 
         body = json.dumps(payload).encode("utf-8")
-        request = Request(  # noqa: S310 - endpoint is validated as HTTP(S) below
+        request = Request(  # nosec B310 - _validate_gateway_url restricts scheme to HTTP(S) only  # noqa: S310
             _validate_gateway_url(self.base_url),
             data=body,
-            headers={"Content-Type": "application/json"},
+            headers=self._auth_headers(),
             method="POST",
         )
 
         try:
-            with urlopen(request, timeout=5) as response:  # noqa: S310 - validated HTTP(S) URL
+            with urlopen(request, timeout=5) as response:  # nosec B310 - validated HTTP(S) URL above  # nosem  # noqa: S310
                 status_code = response.getcode()
                 response_text = response.read().decode("utf-8")
         except HTTPError as exc:
