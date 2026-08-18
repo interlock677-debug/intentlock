@@ -8,8 +8,8 @@ services:
     env_file:
       - .env
     environment:
-      DATABASE_URL: postgresql+psycopg2://intentlock:intentlock_secret@db:5432/intentlock
-      REDIS_URL: redis://redis:6379/0
+      DATABASE_URL: postgresql+psycopg2://${POSTGRES_USER:-intentlock}:${POSTGRES_PASSWORD:?POSTGRES_PASSWORD must be set}@db:5432/intentlock
+      REDIS_URL: redis://:${REDIS_PASSWORD:?REDIS_PASSWORD must be set}@redis:6379/0
       REDIS_ENABLED: "true"
       APP_ENV: production
       DEBUG: "false"
@@ -24,23 +24,27 @@ services:
     restart: unless-stopped
     networks:
       - intentlock-net
+    tmpfs:
+      - /tmp/intentlock:noexec,nosuid,size=64m
     healthcheck:
       test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/api/v1/ready')"]
       interval: 30s
       timeout: 5s
       start_period: 10s
       retries: 3
+    security_opt:
+      - no-new-privileges:true
 
   db:
     image: postgres:16-alpine
     environment:
       POSTGRES_DB: intentlock
-      POSTGRES_USER: intentlock
-      POSTGRES_PASSWORD: intentlock_secret
+      POSTGRES_USER: ${POSTGRES_USER:-intentlock}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?POSTGRES_PASSWORD must be set}
     volumes:
       - postgres_data:/var/lib/postgresql/data
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U intentlock -d intentlock"]
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-intentlock} -d intentlock"]
       interval: 10s
       timeout: 5s
       retries: 5
@@ -50,11 +54,11 @@ services:
 
   redis:
     image: redis:7-alpine
-    command: ["redis-server", "--appendonly", "yes"]
+    command: ["redis-server", "--appendonly", "yes", "--requirepass", "${REDIS_PASSWORD:?REDIS_PASSWORD must be set}"]
     volumes:
       - redis_data:/data
     healthcheck:
-      test: ["CMD", "redis-cli", "ping"]
+      test: ["CMD", "redis-cli", "--no-auth-warning", "-a", "${REDIS_PASSWORD:?REDIS_PASSWORD must be set}", "ping"]
       interval: 10s
       timeout: 5s
       retries: 5
