@@ -23,6 +23,11 @@ class SQLAlchemyUserRepository(UserRepository):
         model = self._session.scalar(stmt)
         return self._to_entity(model) if model else None
 
+    async def get_by_tenant(self, tenant_id: str) -> list[User]:
+        stmt = select(UserModel).where(UserModel.tenant_id == tenant_id)
+        models = self._session.scalars(stmt).all()
+        return [self._to_entity(model) for model in models]
+
     async def save(self, user: User) -> User:
         model = self._session.get(UserModel, user.id)
         if model is None:
@@ -32,12 +37,16 @@ class SQLAlchemyUserRepository(UserRepository):
                 hashed_password=user.hashed_password,
                 is_active=user.is_active,
                 created_at=user.created_at,
+                role=user.role,
+                tenant_id=user.tenant_id,
             )
             self._session.add(model)
         else:
             model.email = user.email
             model.hashed_password = user.hashed_password
             model.is_active = user.is_active
+            model.role = user.role
+            model.tenant_id = user.tenant_id
 
         self._session.flush()
         return self._to_entity(model)
@@ -54,4 +63,6 @@ class SQLAlchemyUserRepository(UserRepository):
             hashed_password=model.hashed_password,
             is_active=model.is_active,
             created_at=model.created_at,
+            role=model.role,
+            tenant_id=model.tenant_id,
         )

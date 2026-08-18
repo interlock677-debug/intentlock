@@ -74,7 +74,12 @@ def upgrade() -> None:
         sa.Column("decided_by", sa.Uuid(), nullable=True),
         sa.PrimaryKeyConstraint("id"),
     )
-    op.create_index(op.f("ix_approval_requests_request_id"), "approval_requests", ["request_id"], unique=True)
+    op.create_index(
+        op.f("ix_approval_requests_request_id"),
+        "approval_requests",
+        ["request_id"],
+        unique=True,
+    )
     op.create_index(op.f("ix_approval_requests_status"), "approval_requests", ["status"])
 
 

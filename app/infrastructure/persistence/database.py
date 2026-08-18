@@ -7,16 +7,18 @@ from sqlalchemy.pool import StaticPool
 
 from app.infrastructure.config.settings import get_settings
 
+
+def _build_engine_kwargs(database_url: str) -> dict[str, object]:
+    kwargs: dict[str, object] = {"pool_pre_ping": True}
+    if database_url.startswith("sqlite"):
+        kwargs["connect_args"] = {"check_same_thread": False}
+    if database_url == "sqlite:///:memory:":
+        kwargs["poolclass"] = StaticPool
+    return kwargs
+
+
 settings = get_settings()
-
-_engine_kwargs: dict[str, object] = {"pool_pre_ping": True}
-if settings.database_url.startswith("sqlite"):
-    _engine_kwargs["connect_args"] = {"check_same_thread": False}
-if settings.database_url == "sqlite:///:memory:":
-    # Share a single in-memory connection across threads so the database is
-    # visible to both the application and the test client.
-    _engine_kwargs["poolclass"] = StaticPool
-
+_engine_kwargs = _build_engine_kwargs(settings.database_url)
 engine = create_engine(settings.database_url, **_engine_kwargs)
 
 SessionLocal = sessionmaker(bind=engine, autocommit=False, autoflush=False, expire_on_commit=False)
