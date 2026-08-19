@@ -1,6 +1,6 @@
 # IntentLock
 
-**Security and authorization control plane for AI agents.**
+**Proof-of-intent authorization control plane for AI agents.**
 
 IntentLock evaluates a proposed tool action before it executes, returns a short-lived Ed25519 execution token for permitted actions, and consumes that token exactly once. This stops prompt-injection hijacks, unauthorized data access, destructive operations, and compliance violations before they reach production systems.
 
@@ -13,6 +13,28 @@ IntentLock evaluates a proposed tool action before it executes, returns a short-
 ![Tests](https://img.shields.io/badge/tests-760%20passing-brightgreen)
 ![Coverage](https://img.shields.io/badge/coverage-99.92%25-ff69b4)
 
+---
+
+## Core message
+
+**Before an AI agent executes a high-impact tool action, IntentLock evaluates whether that action should be allowed.**
+
+```
+AI Agent
+   ↓
+"Transfer $50,000"
+   ↓
+INTENTLOCK
+   ↓
+Policy + Authorization + Risk
+   ↓
+ALLOW / DENY / HUMAN APPROVAL
+   ↓
+Execution + Audit Trail
+```
+
+---
+
 ## The problem
 
 AI agents execute tools on behalf of users. Without a control plane between intent and execution, an agent can be tricked into:
@@ -23,6 +45,26 @@ AI agents execute tools on behalf of users. Without a control plane between inte
 - Violating regulatory compliance rules
 
 Traditional IAM secures users; it does not secure agent reasoning steps. IntentLock fills that gap.
+
+---
+
+## Demo
+
+Run the included demonstration to see IntentLock in action:
+
+```bash
+python examples/demo_agent_defense.py
+```
+
+The demo shows three scenarios:
+
+1. **Legitimate request** — a safe SQL query is permitted
+2. **Prompt injection attack** — a `DROP TABLE` command is blocked
+3. **Unauthorized transfer** — a transfer exceeding the user's stated limit is blocked
+
+Output includes audit trail verification from `logs/audit_trail.jsonl`.
+
+---
 
 ## Architecture
 
@@ -46,6 +88,21 @@ Audit Trail
 
 The gateway sits between the agent and the tools it calls. Every tool action is evaluated for intent, policy compliance, and security risk before an Ed25519 execution token is issued.
 
+---
+
+## Why IntentLock?
+
+| Concern | How IntentLock addresses it |
+|---------|----------------------------|
+| Prompt injection hijacks | Proof-of-intent evaluation with regex, SQL parsing, URL/scheme/path validation, and policy-as-code |
+| Unauthorized tool execution | Short-lived Ed25519 execution tokens consumed exactly once with atomic nonce replay protection |
+| Destructive operations | YAML-configured, versioned policy rules with precedence and rollback |
+| Compliance violations | Tamper-evident JSONL audit log with SHA-256 hash chains and HMAC-signed exports |
+| Lack of visibility | Human-in-the-loop queue with database-backed durable approvals and RBAC |
+| Integration friction | Python SDK + LangChain wrapper with `guard_tool` decorator |
+
+---
+
 ## Key capabilities
 
 - **Proof-of-intent evaluation** — regex, sqlglot parser, URL/scheme/path validation, and policy-as-code
@@ -55,21 +112,7 @@ The gateway sits between the agent and the tools it calls. Every tool action is 
 - **Tamper-evident audit log** — JSONL events chained with SHA-256 hashes and HMAC-signed compliance exports
 - **Python SDK + LangChain wrapper** — drop-in integration with `guard_tool` decorator
 
-## Demo
-
-Run the included demonstration to see IntentLock in action:
-
-```bash
-python examples/demo_agent_defense.py
-```
-
-The demo shows three scenarios:
-
-1. **Legitimate request** — a safe SQL query is permitted
-2. **Prompt injection attack** — a `DROP TABLE` command is blocked
-3. **Unauthorized transfer** — a transfer exceeding the user's stated limit is blocked
-
-Output includes audit trail verification from `logs/audit_trail.jsonl`.
+---
 
 ## Quickstart
 
@@ -105,6 +148,8 @@ alembic current
 ```bash
 pip install intentlock
 ```
+
+---
 
 ## Example usage
 
@@ -190,78 +235,11 @@ client.approve_request("request-uuid-here")
 client.reject_request("request-uuid-here")
 ```
 
-## Documentation
+---
 
-- [Developer Quickstart](docs/developer/QUICKSTART.md) — 5-minute setup guide
-- [Developer Examples](docs/developer/EXAMPLES.md) — multi-agent, LangChain, HITL, Docker, K8s
-- [Developer Onboarding](docs/developer/ONBOARDING.md) — week-one checklist for new engineers
-- [SDK Reference](sdk/README.md) — Python SDK and LangChain wrapper docs
-- [Architecture](docs/architecture/ARCHITECTURE.md) — layers, trust boundaries, request flow, attack paths
-- [Security Assurance Report](docs/security/SECURITY_ASSURANCE_REPORT.md) — controls, test evidence, findings, remediation
-- [Security Hardening Roadmap](docs/security/SECURITY_HARDENING_ROADMAP.md) — P0/P1/P2/P3 security roadmap
-- [Final Independent Audit](docs/security/FINAL_INDEPENDENT_AUDIT.md) — adversarial test results and evidence
-- [Product Positioning](docs/business/PRODUCT_POSITIONING.md) — value proposition, target market, competitive differentiation
-- [Pricing](docs/business/PRICING.md) — Free / Pro / Business / Enterprise tier details
-- [Target Market](docs/business/TARGET_MARKET.md) — buyer personas, use cases, market trends
-- [Enterprise Deployment](docs/commercial/ENTERPRISE_DEPLOYMENT.md) — multi-tenant, multi-region, air-gapped, K8s, DR, compliance
+## Security evidence
 
-## Security
-
-IntentLock implements defense-in-depth controls across the authorization path. For a complete review, see [`docs/security/SECURITY_ASSURANCE_REPORT.md`](docs/security/SECURITY_ASSURANCE_REPORT.md).
-
-### Security assumptions
-
-- The intent verification and execution endpoints (`/intent/verify`, `/intent/execute`) require bearer-token authentication (`CurrentUser`). The SDK must provide a valid `auth_token`.
-- Access tokens rely on HS256 signature validation and short expiration. They have no server-side replay protection. Rotation and high-entropy secrets are required in non-development environments.
-- Execution tokens use Ed25519 signatures with atomic nonce consumption. Redis failure in production causes token consumption to fail closed.
-- Rate limiting is process-local when Redis is unavailable. It is an availability control, not a distributed security boundary.
-- The SDK validates gateway URLs as HTTP(S) but does not validate TLS certificates or perform network-level access control.
-
-### Security boundaries
-
-- **Bearer-authenticated intent endpoints**: `/intent/verify` and `/intent/execute` require a valid bearer token (`CurrentUser`). The SDK must provide an `auth_token`.
-- **Short-lived tokens**: Execution tokens expire in 1–60 seconds. Replay is prevented by atomic nonce consumption.
-- **Redis fail-closed**: Production deployments require Redis. If Redis is unavailable, nonce consumption fails and the request is denied.
-- **Process-local rate limiting**: When Redis is unavailable, rate limiting falls back to in-memory counters that are not shared across instances.
-- **HITL durability**: Approval requests are persisted in PostgreSQL and survive restarts.
-- **Key management**: Ed25519 keys are generated in-process by default. Use `EXECUTION_KEY_PATH` to persist keys across restarts. Integrate with a KMS/HSM for production.
-
-## API
-
-| Method | Path | Authentication | Purpose |
-| --- | --- | --- | --- |
-| GET | `/api/v1/health` | No | Liveness |
-| GET | `/api/v1/ready` | No | Database and configured-Redis readiness |
-| POST | `/api/v1/auth/register` | No | Create a user and access token |
-| POST | `/api/v1/auth/login` | No | Obtain an access token |
-| GET | `/api/v1/auth/me` | Bearer | Current user |
-| POST | `/api/v1/intent/verify` | Bearer | Evaluate an action and issue an execution token when allowed |
-| POST | `/api/v1/intent/execute` | Bearer | Consume one execution token |
-| GET | `/api/v1/approval/pending` | Bearer | List pending HITL requests |
-| POST | `/api/v1/approval/{request_id}/approve` | Bearer | Approve a HITL request |
-| POST | `/api/v1/approval/{request_id}/reject` | Bearer | Reject a HITL request |
-| GET | `/api/v1/.well-known/jwks.json` | No | Execution-token public key |
-
-OpenAPI is available at `/openapi.json` only when `DEBUG=true`.
-
-## Docker
-
-`docker compose up --build` starts the application, PostgreSQL, and Redis. Compose requires explicitly set credentials via environment variables; the application image runs as the non-root `intentlock` user with a restricted `/tmp` tmpfs mount. Persist the PostgreSQL and Redis volumes and forward `logs/audit_trail.jsonl` to centralized storage.
-
-Example `.env` for Docker Compose:
-
-```bash
-POSTGRES_USER=intentlock
-POSTGRES_PASSWORD=<secure-random-value>
-REDIS_PASSWORD=<secure-random-value>
-JWT_SECRET_KEY=<secure-random-value-at-least-32-chars>
-```
-
-## Security & Trust
-
-This section presents security evidence from the existing repository. It does not claim certification or compliance.
-
-### Testing evidence
+This section presents automated repository/testing evidence. It does not claim certification or compliance.
 
 | Check | Result |
 |-------|--------|
@@ -290,6 +268,81 @@ This section presents security evidence from the existing repository. It does no
 - This is **not** a guarantee of security outcomes
 - Testing evidence does not equal certification
 
+---
+
+## Security assumptions and boundaries
+
+### Security assumptions
+
+- The intent verification and execution endpoints (`/intent/verify`, `/intent/execute`) require bearer-token authentication (`CurrentUser`). The SDK must provide a valid `auth_token`.
+- Access tokens rely on HS256 signature validation and short expiration. They have no server-side replay protection. Rotation and high-entropy secrets are required in non-development environments.
+- Execution tokens use Ed25519 signatures with atomic nonce consumption. Redis failure in production causes token consumption to fail closed.
+- Rate limiting is process-local when Redis is unavailable. It is an availability control, not a distributed security boundary.
+- The SDK validates gateway URLs as HTTP(S) but does not validate TLS certificates or perform network-level access control.
+
+### Security boundaries
+
+- **Bearer-authenticated intent endpoints**: `/intent/verify` and `/intent/execute` require a valid bearer token (`CurrentUser`). The SDK must provide an `auth_token`.
+- **Short-lived tokens**: Execution tokens expire in 1–60 seconds. Replay is prevented by atomic nonce consumption.
+- **Redis fail-closed**: Production deployments require Redis. If Redis is unavailable, nonce consumption fails and the request is denied.
+- **Process-local rate limiting**: When Redis is unavailable, rate limiting falls back to in-memory counters that are not shared across instances.
+- **HITL durability**: Approval requests are persisted in PostgreSQL and survive restarts.
+- **Key management**: Ed25519 keys are generated in-process by default. Use `EXECUTION_KEY_PATH` to persist keys across restarts. Integrate with a KMS/HSM for production.
+
+---
+
+## API
+
+| Method | Path | Authentication | Purpose |
+| --- | --- | --- | --- |
+| GET | `/api/v1/health` | No | Liveness |
+| GET | `/api/v1/ready` | No | Database and configured-Redis readiness |
+| POST | `/api/v1/auth/register` | No | Create a user and access token |
+| POST | `/api/v1/auth/login` | No | Obtain an access token |
+| GET | `/api/v1/auth/me` | Bearer | Current user |
+| POST | `/api/v1/intent/verify` | Bearer | Evaluate an action and issue an execution token when allowed |
+| POST | `/api/v1/intent/execute` | Bearer | Consume one execution token |
+| GET | `/api/v1/approval/pending` | Bearer | List pending HITL requests |
+| POST | `/api/v1/approval/{request_id}/approve` | Bearer | Approve a HITL request |
+| POST | `/api/v1/approval/{request_id}/reject` | Bearer | Reject a HITL request |
+| GET | `/api/v1/.well-known/jwks.json` | No | Execution-token public key |
+
+OpenAPI is available at `/openapi.json` only when `DEBUG=true`.
+
+---
+
+## Documentation
+
+- [Developer Quickstart](docs/developer/QUICKSTART.md) — 5-minute setup guide
+- [Developer Examples](docs/developer/EXAMPLES.md) — multi-agent, LangChain, HITL, Docker, K8s
+- [Developer Onboarding](docs/developer/ONBOARDING.md) — week-one checklist for new engineers
+- [SDK Reference](sdk/README.md) — Python SDK and LangChain wrapper docs
+- [Architecture](docs/architecture/ARCHITECTURE.md) — layers, trust boundaries, request flow, attack paths
+- [Security Assurance Report](docs/security/SECURITY_ASSURANCE_REPORT.md) — controls, test evidence, findings, remediation
+- [Security Hardening Roadmap](docs/security/SECURITY_HARDENING_ROADMAP.md) — P0/P1/P2/P3 security roadmap
+- [Final Independent Audit](docs/security/FINAL_INDEPENDENT_AUDIT.md) — adversarial test results and evidence
+- [Product Positioning](docs/business/PRODUCT_POSITIONING.md) — value proposition, target market, competitive differentiation
+- [Pricing](docs/business/PRICING.md) — Free / Pro / Business / Enterprise tier details
+- [Target Market](docs/business/TARGET_MARKET.md) — buyer personas, use cases, market trends
+- [Enterprise Deployment](docs/commercial/ENTERPRISE_DEPLOYMENT.md) — multi-tenant, multi-region, air-gapped, K8s, DR, compliance
+
+---
+
+## Docker
+
+`docker compose up --build` starts the application, PostgreSQL, and Redis. Compose requires explicitly set credentials via environment variables; the application image runs as the non-root `intentlock` user with a restricted `/tmp` tmpfs mount. Persist the PostgreSQL and Redis volumes and forward `logs/audit_trail.jsonl` to centralized storage.
+
+Example `.env` for Docker Compose:
+
+```bash
+POSTGRES_USER=intentlock
+POSTGRES_PASSWORD=<secure-random-value>
+REDIS_PASSWORD=<secure-random-value>
+JWT_SECRET_KEY=<secure-random-value-at-least-32-chars>
+```
+
+---
+
 ## Project status
 
 IntentLock V4 is an actively developed security and authorization platform for AI-agent workloads. The codebase is functionally complete, tested, and hardened with documented architectural limitations.
@@ -312,17 +365,23 @@ IntentLock V4 is an actively developed security and authorization platform for A
 - No regulatory compliance assessment has been performed
 - Git-tracked runtime data (`intentlock.db`, `logs/audit_trail.jsonl`) is documented for future history cleanup
 
+---
+
 ## Operations
 
 Audit events are written as JSONL to `logs/audit_trail.jsonl` and include timestamps, event type, and correlation ID. Preserve those logs according to the organization's retention policy, alert on repeated policy/replay failures, rotate JWT and execution-signing material through a controlled deployment, and restore PostgreSQL/Redis from tested backups.
 
 On an incident, restrict API ingress, rotate affected secrets, retain audit logs, investigate correlation IDs, and invalidate/redeploy signing material as appropriate. Tokens are intentionally short lived; replay attempts are denied.
 
+---
+
 ## Future extension points
 
 `KMSKeyManager` is an interface-shaped placeholder, not a configured KMS integration. Provider-backed signing, automatic key rotation, distributed rate limiting, and downstream-resource authorization are future deployment capabilities, not V4 runtime features.
 
 V4.0 has known limitations documented in `docs/security/SECURITY_ASSURANCE_REPORT.md`. Future security patches, dependency updates, infrastructure changes, and new capabilities remain normal post-release maintenance.
+
+---
 
 ## Verification
 
@@ -339,6 +398,8 @@ alembic current
 
 `--no-cov` prevents pytest-cov's configured inner collector from conflicting with the outer coverage command.
 
+---
+
 ## Commercial
 
 IntentLock is available in Free, Pro, Business, and Enterprise tiers.
@@ -350,4 +411,4 @@ IntentLock is available in Free, Pro, Business, and Enterprise tiers.
 
 See [`docs/business/PRICING.md`](docs/business/PRICING.md) for full feature comparisons and [`docs/commercial/ENTERPRISE_DEPLOYMENT.md`](docs/commercial/ENTERPRISE_DEPLOYMENT.md) for production patterns.
 
-For sales, partnerships, or enterprise inquiries: sales@intentlock.io
+For sales, partnerships, or enterprise inquiries: **interlock677@gmail.com**
